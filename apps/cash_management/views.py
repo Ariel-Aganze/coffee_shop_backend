@@ -8,6 +8,7 @@ from apps.accounts.access import scope_to_branches
 from apps.accounts.constants import UserRole
 from apps.accounts.permissions import HasAnyRole
 from apps.branches.models import Branch
+from drf_spectacular.utils import extend_schema
 
 from .models import CashSession
 from .serializers import (
@@ -15,6 +16,7 @@ from .serializers import (
     CashSessionSerializer,
     CloseSessionSerializer,
     OpenSessionSerializer,
+    ReconciliationSerializer,
 )
 from .services import (
     add_cash_movement,
@@ -29,6 +31,7 @@ class CashSessionViewSet(
     mixins.RetrieveModelMixin,
     viewsets.GenericViewSet,
 ):
+    queryset = CashSession.objects.none()  # schema only; real queryset in get_queryset
     serializer_class = CashSessionSerializer
     permission_classes = [IsAuthenticated]
 
@@ -54,6 +57,7 @@ class CashSessionViewSet(
         return qs.order_by("-opened_at")
 
     # ---------- Open ----------
+    @extend_schema(request=OpenSessionSerializer, responses={201: CashSessionSerializer})
     @action(detail=False, methods=["post"], url_path="open")
     def open_session(self, request):
         if request.user.role not in (
@@ -77,6 +81,7 @@ class CashSessionViewSet(
                         status=status.HTTP_201_CREATED)
 
     # ---------- Close ----------
+    @extend_schema(request=CloseSessionSerializer, responses=CashSessionSerializer)
     @action(detail=True, methods=["post"], url_path="close")
     def close_session(self, request, pk=None):
         session = self.get_object()
@@ -100,12 +105,14 @@ class CashSessionViewSet(
         return Response(CashSessionSerializer(session).data)
 
     # ---------- Live reconciliation preview ----------
+    @extend_schema(responses=ReconciliationSerializer)
     @action(detail=True, methods=["get"], url_path="reconciliation")
     def reconciliation(self, request, pk=None):
         session = self.get_object()
         return Response(compute_expected_cash(session))
 
     # ---------- Manual movement ----------
+    @extend_schema(request=CashMovementCreateSerializer, responses={201: CashSessionSerializer})
     @action(detail=True, methods=["post"], url_path="movements")
     def add_movement(self, request, pk=None):
         session = self.get_object()

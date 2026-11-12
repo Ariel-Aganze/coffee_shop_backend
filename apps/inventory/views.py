@@ -9,6 +9,7 @@ from apps.accounts.constants import UserRole
 from apps.accounts.permissions import HasAnyRole
 from apps.branches.models import Branch
 from apps.products.models import Product
+from drf_spectacular.utils import extend_schema
 
 from .models import Inventory, StockMovement
 from .serializers import (
@@ -35,6 +36,7 @@ class InventoryViewSet(
     Read-only list of stock levels with per-branch scoping.
     Writes happen through dedicated actions.
     """
+    queryset = Inventory.objects.none()  # schema only; real queryset in get_queryset
     serializer_class = InventorySerializer
     permission_classes = [IsAuthenticated]
 
@@ -61,6 +63,7 @@ class InventoryViewSet(
         return qs.order_by("branch__name", "product__name")
 
     # ---------- Threshold update ----------
+    @extend_schema(request=ThresholdUpdateSerializer, responses=InventorySerializer)
     @action(detail=True, methods=["patch"], url_path="threshold")
     def update_threshold(self, request, pk=None):
         if request.user.role not in (
@@ -85,6 +88,7 @@ class StockMovementViewSet(
     Immutable ledger of stock movements (INV-008).
     Writes happen through the dedicated actions below.
     """
+    queryset = StockMovement.objects.none()  # schema only; real queryset in get_queryset
     serializer_class = StockMovementSerializer
     permission_classes = [IsAuthenticated]
 
@@ -139,6 +143,7 @@ class StockMovementViewSet(
         return product
 
     # ---------- Inflow ----------
+    @extend_schema(request=InflowSerializer, responses={201: StockMovementSerializer})
     @action(detail=False, methods=["post"], url_path="inflow")
     def inflow(self, request):
         if request.user.role not in (
@@ -164,6 +169,7 @@ class StockMovementViewSet(
                         status=status.HTTP_201_CREATED)
 
     # ---------- Outflow ----------
+    @extend_schema(request=OutflowSerializer, responses={201: StockMovementSerializer})
     @action(detail=False, methods=["post"], url_path="outflow")
     def outflow(self, request):
         if request.user.role not in (
@@ -189,6 +195,7 @@ class StockMovementViewSet(
                         status=status.HTTP_201_CREATED)
 
     # ---------- Manual adjustment (physical count) ----------
+    @extend_schema(request=AdjustmentSerializer, responses={201: StockMovementSerializer})
     @action(detail=False, methods=["post"], url_path="adjust")
     def adjust(self, request):
         if request.user.role not in (

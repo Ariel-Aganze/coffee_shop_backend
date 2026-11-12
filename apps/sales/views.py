@@ -18,9 +18,10 @@ from apps.payments.services import (
     cancel_sale,
     refund_sale,
 )
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 
 from .models import Sale
-from .serializers import SaleCreateSerializer, SaleReadSerializer
+from .serializers import ReceiptSerializer, SaleCreateSerializer, SaleReadSerializer
 from .services import create_sale
 
 
@@ -30,6 +31,7 @@ class SaleViewSet(
     mixins.CreateModelMixin,
     viewsets.GenericViewSet,
 ):
+    queryset = Sale.objects.none()  # schema only; real queryset in get_queryset
     permission_classes = [IsAuthenticated]
 
     def get_serializer_class(self):
@@ -83,6 +85,16 @@ class SaleViewSet(
 
         return qs.order_by("-created_at")
 
+    @extend_schema(
+        request=SaleCreateSerializer,
+        responses={201: SaleReadSerializer, 200: SaleReadSerializer},
+        parameters=[OpenApiParameter(
+            "X-Idempotency-Key", str, OpenApiParameter.HEADER,
+            description="Unique key per checkout attempt (max 64 chars). Retrying with the "
+                        "same key and payload returns the original sale with 200 instead of "
+                        "creating a duplicate (POS-022).",
+        )],
+    )
     def create(self, request, *args, **kwargs):
         serializer = SaleCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -118,6 +130,7 @@ class SaleViewSet(
         return Response(response_data, status=http_status)
 
     # ---------------- Payments ----------------
+    @extend_schema(request=PaymentsBulkCreateSerializer, responses={201: SaleReadSerializer})
     @action(detail=True, methods=["post"], url_path="payments", url_name="sale-payments")
     def payments(self, request, pk=None):
         sale = self.get_object()
@@ -137,6 +150,7 @@ class SaleViewSet(
         )
 
     # ---------------- Refund ----------------
+    @extend_schema(request=RefundCreateSerializer, responses=SaleReadSerializer)
     @action(detail=True, methods=["post"], url_path="refund", url_name="sale-refund")
     def refund(self, request, pk=None):
         if request.user.role not in (UserRole.OWNER, UserRole.BRANCH_MANAGER):
@@ -156,6 +170,7 @@ class SaleViewSet(
         return Response(SaleReadSerializer(sale).data)
 
     # ---------------- Cancel ----------------
+    @extend_schema(request=CancelSerializer, responses=SaleReadSerializer)
     @action(detail=True, methods=["post"], url_path="cancel", url_name="sale-cancel")
     def cancel(self, request, pk=None):
         if request.user.role not in (UserRole.OWNER, UserRole.BRANCH_MANAGER):
@@ -173,6 +188,15 @@ class SaleViewSet(
         return Response(SaleReadSerializer(sale).data)
 
     # ---------------- Receipt ----------------
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("export", str, enum=["pdf"],
+                             description="Return a printable 80 mm PDF instead of JSON."),
+            OpenApiParameter("download", bool,
+                             description="With export=pdf: send as attachment instead of inline."),
+        ],
+        responses={200: OpenApiResponse(ReceiptSerializer, description="JSON receipt, or application/pdf when export=pdf.")},
+    )
     @action(detail=True, methods=["get"], url_path="receipt", url_name="sale-receipt")
     def receipt(self, request, pk=None):
         """

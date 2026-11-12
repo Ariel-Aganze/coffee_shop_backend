@@ -65,6 +65,10 @@ class ThresholdUpdateSerializer(serializers.Serializer):
 
 
 class InflowSerializer(serializers.Serializer):
+    branch = serializers.IntegerField(
+        required=False,
+        help_text="Branch id (may also be passed as ?branch=). Required in one of the two.",
+    )
     product_id = serializers.IntegerField(min_value=1)
     quantity = serializers.DecimalField(
         max_digits=14, decimal_places=4, min_value=Decimal("0.0001"),
@@ -79,6 +83,10 @@ class InflowSerializer(serializers.Serializer):
 
 
 class OutflowSerializer(serializers.Serializer):
+    branch = serializers.IntegerField(
+        required=False,
+        help_text="Branch id (may also be passed as ?branch=). Required in one of the two.",
+    )
     product_id = serializers.IntegerField(min_value=1)
     quantity = serializers.DecimalField(
         max_digits=14, decimal_places=4, min_value=Decimal("0.0001"),
@@ -93,6 +101,10 @@ class OutflowSerializer(serializers.Serializer):
 
 
 class AdjustmentSerializer(serializers.Serializer):
+    branch = serializers.IntegerField(
+        required=False,
+        help_text="Branch id (may also be passed as ?branch=). Required in one of the two.",
+    )
     product_id = serializers.IntegerField(min_value=1)
     new_quantity = serializers.DecimalField(
         max_digits=14, decimal_places=4, min_value=Decimal("0"),

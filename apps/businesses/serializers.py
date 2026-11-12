@@ -4,7 +4,9 @@ from rest_framework import serializers
 from apps.accounts.constants import UserRole
 from apps.accounts.models import User
 from apps.branches.models import Branch
+from apps.branches.serializers import BranchSerializer
 from apps.settings.models import BusinessSettings, Currency
+from apps.settings.serializers import BusinessSettingsSerializer
 
 from .models import Business
 
@@ -105,3 +107,42 @@ class BusinessRegistrationSerializer(serializers.Serializer):
             "settings": business_settings,
             "branch": branch,
         }
+
+# ------------------------------------------------------------------------------
+# Documentation-only shapes (OpenAPI) for POST /api/businesses/register/.
+# BusinessRegistrationSerializer accepts these as plain dicts; these classes
+# describe what each dict must contain.
+# ------------------------------------------------------------------------------
+class _RegistrationOwnerDoc(serializers.Serializer):
+    username = serializers.CharField()
+    email = serializers.EmailField()
+    password = serializers.CharField(min_length=8, write_only=True)
+    first_name = serializers.CharField(required=False)
+    last_name = serializers.CharField(required=False)
+
+
+class _RegistrationSettingsDoc(serializers.Serializer):
+    currency_code = serializers.CharField(max_length=3, help_text="ISO 4217 code, e.g. RWF.")
+    language = serializers.CharField(required=False, default="en")
+    timezone = serializers.CharField(required=False, default="UTC")
+    date_format = serializers.CharField(required=False, default="YYYY-MM-DD")
+    number_format = serializers.CharField(required=False, default="1,234.56")
+
+
+class _RegistrationBranchDoc(serializers.Serializer):
+    name = serializers.CharField()
+    address = serializers.CharField(required=False)
+    phone = serializers.CharField(required=False)
+
+
+class RegistrationRequestDoc(serializers.Serializer):
+    business = BusinessSerializer()
+    owner = _RegistrationOwnerDoc()
+    settings = _RegistrationSettingsDoc()
+    first_branch = _RegistrationBranchDoc()
+
+
+class RegistrationResponseDoc(serializers.Serializer):
+    business = BusinessSerializer()
+    branch = BranchSerializer()
+    settings = BusinessSettingsSerializer()

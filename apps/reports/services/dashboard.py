@@ -308,7 +308,7 @@ def _inventory(user, scope):
             }
             for i in low[:LIST_N]
         ],
-        "stock_valuation": _money(valuation),
+        "stock_valuation": _money(valuation.quantize(Decimal("0.0001"))),
         "stock_valuation_method": "Quantity on hand × current cost price.",
         "items_without_cost_price": without_cost,
         "recent_movements": [

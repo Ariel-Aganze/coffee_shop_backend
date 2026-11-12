@@ -5,6 +5,7 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import serializers
 
 from apps.branches.models import Branch
+from drf_spectacular.utils import extend_schema_field
 
 from .constants import UserRole
 from .models import User, UserBranch
@@ -29,6 +30,7 @@ class UserSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("id", "date_joined")
 
+    @extend_schema_field(serializers.ListField(child=serializers.IntegerField()))
     def get_branch_ids(self, obj):
         return obj.assigned_branch_ids
 
@@ -198,3 +200,16 @@ def build_uid_token(user):
     uid = urlsafe_base64_encode(force_bytes(user.pk))
     token = default_token_generator.make_token(user)
     return uid, token
+
+# ------------------------------------------------------------------------------
+# Documentation-only shapes (OpenAPI) for the auth endpoints
+# ------------------------------------------------------------------------------
+class LoginRequestSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    password = serializers.CharField(write_only=True)
+
+
+class LoginResponseSerializer(serializers.Serializer):
+    access = serializers.CharField()
+    refresh = serializers.CharField()
+    user = UserSerializer()

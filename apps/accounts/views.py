@@ -18,6 +18,8 @@ from .models import User
 from .serializers import (
     BRANCH_MANAGED_ROLES,
     ChangePasswordSerializer,
+    LoginRequestSerializer,
+    LoginResponseSerializer,
     LogoutSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
@@ -28,6 +30,9 @@ from .serializers import (
 )
 
 from rest_framework import viewsets
+from drf_spectacular.utils import extend_schema
+
+from config.schema import DetailSerializer, ErrorSerializer
 
 from .constants import UserRole
 from .permissions import HasAnyRole, IsAdminOrOwner, IsOwner
@@ -44,6 +49,7 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
+    @extend_schema(request=LoginRequestSerializer, responses={200: LoginResponseSerializer, 400: ErrorSerializer, 401: ErrorSerializer, 403: ErrorSerializer}, auth=[])
     def post(self, request):
         username = request.data.get("username", "").strip()
         password = request.data.get("password", "")
@@ -88,6 +94,7 @@ class LogoutView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=LogoutSerializer, responses={204: None, 400: ErrorSerializer})
     def post(self, request):
         serializer = LogoutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -110,6 +117,7 @@ class ChangePasswordView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=ChangePasswordSerializer, responses=DetailSerializer)
     def post(self, request):
         serializer = ChangePasswordSerializer(
             data=request.data, context={"request": request}
@@ -131,6 +139,7 @@ class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
+    @extend_schema(request=PasswordResetRequestSerializer, responses=DetailSerializer, auth=[])
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -174,6 +183,7 @@ class PasswordResetConfirmView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
+    @extend_schema(request=PasswordResetConfirmSerializer, responses=DetailSerializer, auth=[])
     def post(self, request):
         serializer = PasswordResetConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -184,6 +194,7 @@ class PasswordResetConfirmView(APIView):
         return Response({"detail": "Password has been reset."})
 
 
+@extend_schema(responses=UserSerializer)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def me_view(request):
@@ -198,6 +209,7 @@ def me_view(request):
 
 
 class UserViewSet(viewsets.ModelViewSet):
+    queryset = User.objects.none()  # schema only; real queryset in get_queryset
     """
     /api/users/
     - Owner: manages every employee of the business.

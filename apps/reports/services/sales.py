@@ -78,7 +78,7 @@ def sales_summary(request) -> dict:
     refunds = refunds_by(paid, "currency_code")
     unpaid = {
         r["currency_code"]: r
-        for r in unpaid_sales(base).values("currency_code").annotate(
+        for r in unpaid_sales(base).values("currency_code", "currency_decimal_places").annotate(
             count=Count("id"), total=Coalesce(Sum("total_amount"), ZERO),
         ).order_by()
     }
@@ -106,6 +106,7 @@ def sales_summary(request) -> dict:
     for code, open_row in unpaid.items():
         results.append({
             "currency_code": code,
+            "currency_decimal_places": open_row["currency_decimal_places"],
             "total_sales": "0",
             "refunds_total": "0",
             "net_sales": "0",

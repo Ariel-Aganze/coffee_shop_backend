@@ -3,6 +3,9 @@ from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from drf_spectacular.utils import extend_schema
+
+from config.schema import UnreadCountSerializer, UpdatedCountSerializer
 
 from .models import Notification
 from .serializers import NotificationSerializer
@@ -16,6 +19,7 @@ class NotificationViewSet(
     """
     Users only see their own notifications.
     """
+    queryset = Notification.objects.none()  # schema only; real queryset in get_queryset
     serializer_class = NotificationSerializer
     permission_classes = [IsAuthenticated]
 
@@ -33,6 +37,7 @@ class NotificationViewSet(
         return qs.order_by("-created_at")
 
     # ---------- Mark one read ----------
+    @extend_schema(request=None, responses=NotificationSerializer)
     @action(detail=True, methods=["post"], url_path="mark-read")
     def mark_read(self, request, pk=None):
         notification = self.get_object()
@@ -43,6 +48,7 @@ class NotificationViewSet(
         return Response(NotificationSerializer(notification).data)
 
     # ---------- Mark all read ----------
+    @extend_schema(request=None, responses=UpdatedCountSerializer)
     @action(detail=False, methods=["post"], url_path="mark-all-read")
     def mark_all_read(self, request):
         updated = Notification.objects.filter(
@@ -51,6 +57,7 @@ class NotificationViewSet(
         return Response({"updated": updated}, status=status.HTTP_200_OK)
 
     # ---------- Unread count ----------
+    @extend_schema(responses=UnreadCountSerializer)
     @action(detail=False, methods=["get"], url_path="unread-count")
     def unread_count(self, request):
         count = Notification.objects.filter(

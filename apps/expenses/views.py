@@ -19,9 +19,11 @@ from .serializers import (
 from .services import approve_expense, create_expense, reject_expense
 from django.db import models
 from rest_framework import mixins, status, viewsets
+from drf_spectacular.utils import extend_schema
 
 
 class ExpenseCategoryViewSet(viewsets.ModelViewSet):
+    queryset = ExpenseCategory.objects.none()  # schema only; real queryset in get_queryset
     serializer_class = ExpenseCategorySerializer
     permission_classes = [IsAuthenticated]
 
@@ -45,6 +47,7 @@ class ExpenseViewSet(
     mixins.CreateModelMixin,
     viewsets.GenericViewSet,
 ):
+    queryset = Expense.objects.none()  # schema only; real queryset in get_queryset
     permission_classes = [IsAuthenticated]
 
     def get_serializer_class(self):
@@ -86,6 +89,10 @@ class ExpenseViewSet(
 
         return qs.order_by("-created_at")
 
+    @extend_schema(
+        request={"multipart/form-data": ExpenseCreateSerializer, "application/json": ExpenseCreateSerializer},
+        responses={201: ExpenseSerializer},
+    )
     def create(self, request, *args, **kwargs):
         if request.user.role not in (
             UserRole.OWNER, UserRole.BRANCH_MANAGER,
@@ -125,6 +132,7 @@ class ExpenseViewSet(
                         status=status.HTTP_201_CREATED)
 
     # ---------- Approve ----------
+    @extend_schema(request=ExpenseReviewSerializer, responses=ExpenseSerializer)
     @action(detail=True, methods=["post"], url_path="approve")
     def approve(self, request, pk=None):
         if request.user.role not in (UserRole.OWNER, UserRole.BRANCH_MANAGER):
@@ -141,6 +149,7 @@ class ExpenseViewSet(
         return Response(ExpenseSerializer(expense).data)
 
     # ---------- Reject ----------
+    @extend_schema(request=ExpenseReviewSerializer, responses=ExpenseSerializer)
     @action(detail=True, methods=["post"], url_path="reject")
     def reject(self, request, pk=None):
         if request.user.role not in (UserRole.OWNER, UserRole.BRANCH_MANAGER):

@@ -10,6 +10,7 @@ from .serializers import BranchSerializer
 
 class BranchViewSet(viewsets.ModelViewSet):
     serializer_class = BranchSerializer
+    queryset = Branch.objects.none()  # schema only; real queryset in get_queryset
 
     def get_permissions(self):
         if self.action in ("create", "destroy"):

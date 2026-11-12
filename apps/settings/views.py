@@ -6,6 +6,9 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsAdminOrOwner
 from apps.audit.services import log_action
+from drf_spectacular.utils import OpenApiParameter, extend_schema
+
+from config.schema import ErrorSerializer
 
 from .models import BusinessSettings, Currency
 from .serializers import (
@@ -24,6 +27,10 @@ class CurrencyListView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        parameters=[OpenApiParameter("search", str, description="Search by ISO code, name or country.")],
+        responses=CurrencySerializer(many=True),
+    )
     def get(self, request):
         qs = Currency.objects.filter(is_active=True)
         search = request.query_params.get("search", "").strip()
@@ -50,6 +57,7 @@ class BusinessSettingsViewSet(viewsets.GenericViewSet,
     """
     serializer_class = BusinessSettingsSerializer
     permission_classes = [IsAuthenticated]
+    queryset = BusinessSettings.objects.none()  # schema only; see get_object
 
     def get_permissions(self):
         # RBAC 4.2: only the owner (or an authorized admin) manages settings.
@@ -86,6 +94,7 @@ class BusinessSettingsViewSet(viewsets.GenericViewSet,
             business_id=self.request.user.business_id,
         )
 
+    @extend_schema(request=CurrencyChangeRequestSerializer, responses={200: BusinessSettingsSerializer, 400: ErrorSerializer, 403: ErrorSerializer, 404: ErrorSerializer})
     @action(detail=False, methods=["post"], url_path="change-currency")
     def change_currency(self, request):
         if request.user.role != "owner":
@@ -123,6 +132,7 @@ class BusinessSettingsViewSet(viewsets.GenericViewSet,
 
         return Response(BusinessSettingsSerializer(settings).data)
 
+    @extend_schema(responses=CurrencyChangeLogSerializer(many=True))
     @action(detail=False, methods=["get"], url_path="currency-history")
     def currency_history(self, request):
         qs = self.get_object().business.currency_changes.select_related(

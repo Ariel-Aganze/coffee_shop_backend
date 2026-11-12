@@ -21,7 +21,14 @@ from apps.accounts.permissions import HasAnyRole
 from apps.audit.services import log_action
 from apps.branches.models import Branch
 from apps.settings.models import BusinessSettings
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+)
 
+from . import schemas as s
 from .exporters import EXPORT_FORMATS, to_csv, to_pdf
 from .services.branches import branch_comparison
 from .services.cash import cash_reconciliation_report
@@ -116,6 +123,14 @@ def _scope_label(request) -> str:
 # ------------------------------------------------------------------------------
 # Dashboard
 # ------------------------------------------------------------------------------
+@extend_schema_view(get=extend_schema(
+    parameters=[
+        OpenApiParameter("from", str, description="Start date (YYYY-MM-DD). Default: first day of the current month."),
+        OpenApiParameter("to", str, description="End date (YYYY-MM-DD). Default: today."),
+        s.BRANCH,
+    ],
+    responses=s.DashboardSerializer,
+))
 class DashboardView(BaseReportView):
     allowed_roles = FINANCIAL_ROLES
     title = "Dashboard"
@@ -129,6 +144,10 @@ class DashboardView(BaseReportView):
 # ------------------------------------------------------------------------------
 # Sales
 # ------------------------------------------------------------------------------
+@extend_schema_view(get=extend_schema(
+    parameters=s.REPORT_PARAMS,
+    responses={200: OpenApiResponse(s.SalesSummaryReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
 class SalesSummaryView(BaseReportView):
     allowed_roles = SALES_ROLES
     title, slug = "Sales summary", "sales-summary"
@@ -137,6 +156,10 @@ class SalesSummaryView(BaseReportView):
         return sales_summary(request)
 
 
+@extend_schema_view(get=extend_schema(
+    parameters=s.REPORT_PARAMS,
+    responses={200: OpenApiResponse(s.SalesByBranchReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
 class SalesByBranchView(BaseReportView):
     allowed_roles = SALES_ROLES
     title, slug = "Sales by branch", "sales-by-branch"
@@ -145,6 +168,10 @@ class SalesByBranchView(BaseReportView):
         return sales_by_branch(request)
 
 
+@extend_schema_view(get=extend_schema(
+    parameters=s.REPORT_PARAMS,
+    responses={200: OpenApiResponse(s.SalesByProductReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
 class SalesByProductView(BaseReportView):
     allowed_roles = SALES_ROLES
     title, slug = "Sales by product", "sales-by-product"
@@ -153,6 +180,10 @@ class SalesByProductView(BaseReportView):
         return sales_by_product(request)
 
 
+@extend_schema_view(get=extend_schema(
+    parameters=s.REPORT_PARAMS,
+    responses={200: OpenApiResponse(s.SalesByCashierReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
 class SalesByCashierView(BaseReportView):
     allowed_roles = FINANCIAL_ROLES  # compares employees — not for cashiers
     title, slug = "Sales by cashier", "sales-by-cashier"
@@ -161,6 +192,10 @@ class SalesByCashierView(BaseReportView):
         return sales_by_cashier(request)
 
 
+@extend_schema_view(get=extend_schema(
+    parameters=s.REPORT_PARAMS,
+    responses={200: OpenApiResponse(s.SalesByPaymentMethodReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
 class SalesByPaymentMethodView(BaseReportView):
     allowed_roles = SALES_ROLES
     title, slug = "Sales by payment method", "sales-by-payment-method"
@@ -172,6 +207,10 @@ class SalesByPaymentMethodView(BaseReportView):
 # ------------------------------------------------------------------------------
 # Inventory
 # ------------------------------------------------------------------------------
+@extend_schema_view(get=extend_schema(
+    parameters=[s.BRANCH, s.EXPORT],
+    responses={200: OpenApiResponse(s.CurrentStockReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
 class CurrentStockView(BaseReportView):
     allowed_roles = INVENTORY_ROLES
     title, slug = "Current stock", "current-stock"
@@ -180,6 +219,10 @@ class CurrentStockView(BaseReportView):
         return current_stock(request)
 
 
+@extend_schema_view(get=extend_schema(
+    parameters=[s.BRANCH, s.EXPORT],
+    responses={200: OpenApiResponse(s.LowStockReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
 class LowStockView(BaseReportView):
     allowed_roles = INVENTORY_ROLES
     title, slug = "Low stock", "low-stock"
@@ -188,6 +231,10 @@ class LowStockView(BaseReportView):
         return low_stock(request)
 
 
+@extend_schema_view(get=extend_schema(
+    parameters=s.REPORT_PARAMS + [OpenApiParameter("product", int), OpenApiParameter("type", str, description="Movement type, e.g. sale, purchase, adjustment.")],
+    responses={200: OpenApiResponse(s.StockMovementReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
 class StockMovementReportView(BaseReportView):
     allowed_roles = INVENTORY_ROLES
     title, slug = "Stock movements", "stock-movements"
@@ -199,6 +246,10 @@ class StockMovementReportView(BaseReportView):
 # ------------------------------------------------------------------------------
 # Financial
 # ------------------------------------------------------------------------------
+@extend_schema_view(get=extend_schema(
+    parameters=s.REPORT_PARAMS + [s.STATUS],
+    responses={200: OpenApiResponse(s.ExpensesReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
 class ExpensesReportView(BaseReportView):
     title, slug = "Expenses", "expenses"
 
@@ -206,6 +257,10 @@ class ExpensesReportView(BaseReportView):
         return expenses_report(request)
 
 
+@extend_schema_view(get=extend_schema(
+    parameters=s.REPORT_PARAMS,
+    responses={200: OpenApiResponse(s.FinancialSummaryReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
 class FinancialSummaryView(BaseReportView):
     title, slug = "Financial summary", "financial-summary"
 
@@ -213,6 +268,10 @@ class FinancialSummaryView(BaseReportView):
         return financial_summary(request)
 
 
+@extend_schema_view(get=extend_schema(
+    parameters=s.REPORT_PARAMS + [s.STATUS],
+    responses={200: OpenApiResponse(s.CashReconciliationReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
 class CashReconciliationReportView(BaseReportView):
     title, slug = "Cash reconciliation", "cash-reconciliation"
 
@@ -220,6 +279,10 @@ class CashReconciliationReportView(BaseReportView):
         return cash_reconciliation_report(request)
 
 
+@extend_schema_view(get=extend_schema(
+    parameters=[s.FROM, s.TO, s.EXPORT],
+    responses={200: OpenApiResponse(s.BranchComparisonReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
 class BranchComparisonView(BaseReportView):
     title, slug = "Branch comparison", "branch-comparison"
 

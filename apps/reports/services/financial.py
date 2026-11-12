@@ -41,7 +41,8 @@ def _cogs_for_currency(sales_qs, currency: str) -> Decimal:
         price_row = item.product.current_price()
         if price_row and price_row.cost_price:
             total += price_row.cost_price * item.quantity
-    return total
+    # cost × quantity doubles the decimal places; keep the API's 4-place money format.
+    return total.quantize(Decimal("0.0001"))
 
 
 def financial_summary(request) -> dict:

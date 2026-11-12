@@ -131,7 +131,7 @@ REST_FRAMEWORK = {
         "rest_framework.filters.SearchFilter",
         "rest_framework.filters.OrderingFilter",
     ),
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "DEFAULT_PAGINATION_CLASS": "config.pagination.StandardPagination",
     "PAGE_SIZE": 20,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "apps.accounts.exceptions.custom_exception_handler",
@@ -152,6 +152,11 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "Multi-branch coffee shop management system.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    # Keep the default enum hook; then mark role-dependent fields optional.
+    "POSTPROCESSING_HOOKS": [
+        "drf_spectacular.hooks.postprocess_schema_enums",
+        "config.schema.mark_role_dependent_fields_optional",
+    ],
 }
 
 # ------------------------------------------------------------------------------

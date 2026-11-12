@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 
 from .models import CashMovement, CashMovementType, CashSession
 
@@ -62,6 +63,7 @@ class CashSessionSerializer(serializers.ModelSerializer):
         )
         read_only_fields = fields
 
+    @extend_schema_field(serializers.DecimalField(max_digits=14, decimal_places=4, allow_null=True))
     def get_live_expected_cash(self, obj):
         if obj.status != "open":
             return None
@@ -97,3 +99,13 @@ class CashMovementCreateSerializer(serializers.Serializer):
     )
     reason = serializers.CharField()
     reference = serializers.CharField(required=False, allow_blank=True, default="")
+
+class ReconciliationSerializer(serializers.Serializer):
+    """GET /api/cash-sessions/{id}/reconciliation/ — expected-cash breakdown (CASH-007)."""
+    opening = serializers.DecimalField(max_digits=14, decimal_places=4)
+    cash_sales = serializers.DecimalField(max_digits=14, decimal_places=4)
+    cash_refunds = serializers.DecimalField(max_digits=14, decimal_places=4)
+    cash_inflows = serializers.DecimalField(max_digits=14, decimal_places=4)
+    cash_expenses = serializers.DecimalField(max_digits=14, decimal_places=4)
+    cash_withdrawals = serializers.DecimalField(max_digits=14, decimal_places=4)
+    expected_cash = serializers.DecimalField(max_digits=14, decimal_places=4)

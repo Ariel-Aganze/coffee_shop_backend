@@ -27,6 +27,14 @@ def accessible_branch_ids(user) -> list[int] | None:
     return assigned
 
 
+def can_see_costs(user) -> bool:
+    """
+    Cost prices reveal margins. Every role that manages products, stock or
+    finances needs them; cashiers only sell, so they never receive them.
+    """
+    return bool(user and user.is_authenticated and user.role != UserRole.CASHIER)
+
+
 def has_business_wide_access(user) -> bool:
     return accessible_branch_ids(user) is None
 

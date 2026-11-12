@@ -10,7 +10,11 @@ from apps.accounts.constants import UserRole
 from apps.accounts.permissions import HasAnyRole
 from apps.audit.services import log_action
 from apps.branches.models import Branch
+from drf_spectacular.utils import extend_schema
 
+from config.schema import DetailSerializer
+
+from .pricing import with_current_prices
 from .models import (
     BranchProductAvailability,
     Category,
@@ -32,6 +36,7 @@ from .serializers import (
 # Category
 # ------------------------------------------------------------------------------
 class CategoryViewSet(viewsets.ModelViewSet):
+    queryset = Category.objects.none()  # schema only; real queryset in get_queryset
     serializer_class = CategorySerializer
     permission_classes = [IsAuthenticated]
 
@@ -55,6 +60,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
 # Product
 # ------------------------------------------------------------------------------
 class ProductViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.none()  # schema only; real queryset in get_queryset
     permission_classes = [IsAuthenticated]
 
     def get_permissions(self):
@@ -73,7 +79,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         return ProductSerializer
 
     def get_queryset(self):
-        qs = (
+        qs = with_current_prices(
             Product.objects.filter(business_id=self.request.user.business_id)
             .select_related("category")
             .order_by("name")
@@ -123,6 +129,8 @@ class ProductViewSet(viewsets.ModelViewSet):
         )
 
     # ---------- Prices ----------
+    @extend_schema(methods=["GET"], responses=ProductPriceSerializer(many=True))
+    @extend_schema(methods=["POST"], request=ProductPriceCreateSerializer, responses={201: ProductPriceSerializer})
     @action(detail=True, methods=["get", "post"], url_path="prices")
     def prices(self, request, pk=None):
         """
@@ -133,7 +141,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
         if request.method == "GET":
             rows = product.prices.select_related("created_by").all()
-            return Response(ProductPriceSerializer(rows, many=True).data)
+            return Response(ProductPriceSerializer(rows, many=True, context={"request": request}).data)
 
         # POST → new price
         payload = ProductPriceCreateSerializer(data=request.data)
@@ -161,8 +169,9 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "reason": payload.validated_data.get("reason", ""),
             },
         )
-        return Response(ProductPriceSerializer(new_price).data, status=status.HTTP_201_CREATED)
+        return Response(ProductPriceSerializer(new_price, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
+    @extend_schema(responses={200: ProductPriceSerializer, 404: DetailSerializer})
     @action(detail=True, methods=["get"], url_path="current-price")
     def current_price(self, request, pk=None):
         product = self.get_object()
@@ -170,7 +179,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         if not row:
             return Response({"detail": "No price is set for this product."},
                             status=status.HTTP_404_NOT_FOUND)
-        return Response(ProductPriceSerializer(row).data)
+        return Response(ProductPriceSerializer(row, context={"request": request}).data)
 
 
 # ------------------------------------------------------------------------------
@@ -183,6 +192,7 @@ class BranchProductAvailabilityViewSet(
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
+    queryset = BranchProductAvailability.objects.none()  # schema only; real queryset in get_queryset
     serializer_class = BranchProductAvailabilitySerializer
     permission_classes = [IsAuthenticated]
 

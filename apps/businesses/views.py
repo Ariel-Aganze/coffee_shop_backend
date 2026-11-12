@@ -7,9 +7,15 @@ from apps.accounts.permissions import IsAdminOrOwner
 from apps.audit.services import log_action
 from apps.branches.serializers import BranchSerializer
 from apps.settings.serializers import BusinessSettingsSerializer
+from drf_spectacular.utils import extend_schema
 
 from .models import Business
-from .serializers import BusinessRegistrationSerializer, BusinessSerializer
+from .serializers import (
+    BusinessRegistrationSerializer,
+    BusinessSerializer,
+    RegistrationRequestDoc,
+    RegistrationResponseDoc,
+)
 
 
 class BusinessRegistrationView(APIView):
@@ -20,6 +26,7 @@ class BusinessRegistrationView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
+    @extend_schema(request=RegistrationRequestDoc, responses={201: RegistrationResponseDoc}, auth=[])
     def post(self, request):
         serializer = BusinessRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

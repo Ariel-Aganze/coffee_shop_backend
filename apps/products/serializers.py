@@ -4,8 +4,11 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
+from apps.accounts.access import can_see_costs
+
 from apps.branches.models import Branch
 from django.core.validators import MinValueValidator
+from drf_spectacular.utils import extend_schema_field
 
 
 from .models import (
@@ -30,6 +33,11 @@ class CategorySerializer(serializers.ModelSerializer):
 # ------------------------------------------------------------------------------
 # ProductPrice
 # ------------------------------------------------------------------------------
+def _request_user(serializer):
+    request = serializer.context.get("request")
+    return getattr(request, "user", None)
+
+
 class ProductPriceSerializer(serializers.ModelSerializer):
     created_by_display = serializers.CharField(
         source="created_by.username", read_only=True
@@ -47,6 +55,12 @@ class ProductPriceSerializer(serializers.ModelSerializer):
             "created_at",
         )
         read_only_fields = ("id", "created_by", "created_at")
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not can_see_costs(_request_user(self)):
+            data.pop("cost_price", None)
+        return data
 
 
 # ------------------------------------------------------------------------------
@@ -76,13 +90,28 @@ class ProductSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("id", "created_at", "updated_at")
 
-    def get_current_price(self, obj):
+    def _price(self, obj, field):
+        # Use the SQL annotation from products.pricing when the queryset has
+        # it (lists); fall back to a query for single objects.
+        if hasattr(obj, f"current_{field}"):
+            value = getattr(obj, f"current_{field}")
+            return str(value) if value is not None else None
         row = obj.current_price()
-        return str(row.selling_price) if row else None
+        return str(getattr(row, field)) if row else None
 
+    @extend_schema_field(serializers.DecimalField(max_digits=14, decimal_places=4, allow_null=True))
+    def get_current_price(self, obj):
+        return self._price(obj, "selling_price")
+
+    @extend_schema_field(serializers.DecimalField(max_digits=14, decimal_places=4, allow_null=True))
     def get_current_cost_price(self, obj):
-        row = obj.current_price()
-        return str(row.cost_price) if row else None
+        return self._price(obj, "cost_price")
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not can_see_costs(_request_user(self)):
+            data.pop("current_cost_price", None)
+        return data
 
 
 # ------------------------------------------------------------------------------

@@ -89,3 +89,38 @@ class SaleCreateSerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True, default="")
 
 
+
+
+# ------------------------------------------------------------------------------
+# Receipt (documentation of GET /api/sales/{id}/receipt/, SRS 8.3)
+# ------------------------------------------------------------------------------
+class _ReceiptItemSerializer(serializers.Serializer):
+    name = serializers.CharField()
+    sku = serializers.CharField()
+    quantity = serializers.DecimalField(max_digits=12, decimal_places=4)
+    unit_price = serializers.DecimalField(max_digits=14, decimal_places=4)
+    discount = serializers.DecimalField(max_digits=14, decimal_places=4)
+    line_total = serializers.DecimalField(max_digits=14, decimal_places=4)
+
+
+class _ReceiptPaymentSerializer(serializers.Serializer):
+    method = serializers.CharField(help_text="Display name, e.g. 'Mobile Money'.")
+    amount = serializers.DecimalField(max_digits=14, decimal_places=4)
+    reference = serializers.CharField()
+    is_refund = serializers.BooleanField()
+
+
+class ReceiptSerializer(serializers.Serializer):
+    business = serializers.CharField()
+    branch = serializers.CharField()
+    transaction_number = serializers.CharField()
+    datetime = serializers.DateTimeField(allow_null=True)
+    cashier = serializers.CharField()
+    items = _ReceiptItemSerializer(many=True)
+    subtotal = serializers.DecimalField(max_digits=14, decimal_places=4)
+    discount_total = serializers.DecimalField(max_digits=14, decimal_places=4)
+    total_amount = serializers.DecimalField(max_digits=14, decimal_places=4)
+    currency_code = serializers.CharField()
+    payments = _ReceiptPaymentSerializer(many=True)
+    status = serializers.CharField()
+    note = serializers.CharField()
