@@ -3,6 +3,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.permissions import IsAdminOrOwner
 from apps.audit.services import log_action
 from apps.branches.serializers import BranchSerializer
 from apps.settings.serializers import BusinessSettingsSerializer
@@ -56,5 +57,22 @@ class BusinessViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     http_method_names = ["get", "patch", "head", "options"]
 
+    def get_permissions(self):
+        # RBAC 4.2: only the owner (or an authorized admin) edits the business profile.
+        if self.action in ("update", "partial_update"):
+            return [IsAdminOrOwner()]
+        return [IsAuthenticated()]
+
     def get_queryset(self):
         return Business.objects.filter(id=self.request.user.business_id)
+
+    def perform_update(self, serializer):
+        business = serializer.save()
+        log_action(
+            business=business,
+            user=self.request.user,
+            action="business_profile_updated",
+            target_type="Business",
+            target_id=str(business.pk),
+            metadata={"fields": sorted(serializer.validated_data.keys())},
+        )

@@ -57,7 +57,9 @@ class ProductViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_permissions(self):
-        if self.action in ("list", "retrieve", "prices", "current_price"):
+        # `prices` serves GET (read) and POST (price change) — only the GET is open.
+        is_price_read = self.action == "prices" and self.request.method == "GET"
+        if self.action in ("list", "retrieve", "current_price") or is_price_read:
             return [IsAuthenticated()]
         self.allowed_roles = (UserRole.OWNER, UserRole.INVENTORY_MANAGER)
         return [HasAnyRole()]

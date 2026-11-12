@@ -4,8 +4,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.permissions import IsOwner
-from apps.businesses.models import Business
+from apps.accounts.permissions import IsAdminOrOwner
+from apps.audit.services import log_action
 
 from .models import BusinessSettings, Currency
 from .serializers import (
@@ -50,6 +50,25 @@ class BusinessSettingsViewSet(viewsets.GenericViewSet,
     """
     serializer_class = BusinessSettingsSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        # RBAC 4.2: only the owner (or an authorized admin) manages settings.
+        if self.action in ("update", "partial_update"):
+            return [IsAdminOrOwner()]
+        return [IsAuthenticated()]
+
+    def perform_update(self, serializer):
+        before = {f: getattr(serializer.instance, f) for f in serializer.validated_data}
+        settings = serializer.save()
+        log_action(
+            business=settings.business,
+            user=self.request.user,
+            action="business_settings_updated",
+            target_type="BusinessSettings",
+            target_id=str(settings.pk),
+            previous_value=before,
+            new_value={f: getattr(settings, f) for f in before},
+        )
 
     def get_object(self):
         return BusinessSettings.objects.select_related(

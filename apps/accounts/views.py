@@ -1,5 +1,8 @@
+import logging
+
 from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
+from django.core.mail import send_mail
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -25,6 +28,8 @@ from .serializers import (
 from rest_framework import viewsets
 
 from .permissions import IsAdminOrOwner, IsOwner
+
+logger = logging.getLogger(__name__)
 
 
 class LoginView(APIView):
@@ -126,18 +131,33 @@ class PasswordResetRequestView(APIView):
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = User.objects.filter(email=serializer.validated_data["email"]).first()
+        user = User.objects.filter(
+            email__iexact=serializer.validated_data["email"], is_active=True,
+        ).first()
         if user:
+            # The uid/token must ONLY travel by email — returning them in the
+            # response would let anyone reset any account by its email address.
             uid, token = build_uid_token(user)
-            # TODO: send email with uid+token.
-            # In dev, we return them so you can test the flow.
-            return Response(
-                {
-                    "detail": "If the email exists, a reset link was sent.",
-                    "uid": uid,
-                    "token": token,
-                }
+            reset_url = (
+                f"{settings.FRONTEND_URL.rstrip('/')}/reset-password"
+                f"?uid={uid}&token={token}"
             )
+            try:
+                send_mail(
+                    subject="Reset your password",
+                    message=(
+                        "A password reset was requested for your account.\n\n"
+                        f"Open this link to choose a new password:\n{reset_url}\n\n"
+                        "If you did not request this, you can ignore this email."
+                    ),
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email],
+                )
+            except Exception:
+                logger.exception("Failed to send password reset email (user id=%s)", user.pk)
+            log_action(user=user, business=user.business,
+                       action="password_reset_requested")
+        # Identical response whether or not the email exists (no enumeration).
         return Response(
             {"detail": "If the email exists, a reset link was sent."}
         )

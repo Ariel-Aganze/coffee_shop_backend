@@ -10,20 +10,16 @@ class CurrencySerializer(serializers.ModelSerializer):
 
 
 class BusinessSettingsSerializer(serializers.ModelSerializer):
+    # Read-only on purpose: the primary currency may only be changed through
+    # POST /api/settings/me/change-currency/, which enforces owner-only access,
+    # explicit confirmation, CurrencyChangeLog and audit (CUR-014/015/019).
     primary_currency = CurrencySerializer(read_only=True)
-    primary_currency_code = serializers.SlugRelatedField(
-        queryset=Currency.objects.filter(is_active=True),
-        slug_field="code",
-        source="primary_currency",
-        write_only=True,
-    )
 
     class Meta:
         model = BusinessSettings
         fields = (
             "id",
             "primary_currency",
-            "primary_currency_code",
             "language",
             "timezone",
             "date_format",
