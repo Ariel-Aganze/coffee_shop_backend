@@ -55,7 +55,9 @@ class ReportsTests(TestCase):
     def _auth(self, token):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
 
-    def _make_sale(self, branch, quantity="2"):
+    def _make_sale(self, branch, quantity="2", pay=True):
+        """Create a sale and (by default) pay it in full in cash —
+        only fully paid sales count as revenue."""
         self._auth(self._login("owner"))
         r = self.client.post(
             "/api/sales/",
@@ -63,6 +65,12 @@ class ReportsTests(TestCase):
              "items": [{"product_id": self.product.id, "quantity": quantity}]},
             format="json",
         )
+        if pay:
+            self.client.post(
+                f"/api/sales/{r.data['id']}/payments/",
+                {"payments": [{"method": "cash", "amount": r.data["total_amount"]}]},
+                format="json",
+            )
         return r.data
 
     def test_sales_summary(self):

@@ -119,9 +119,14 @@ def record_inflow(
     reason: str = "",
     reference: str = "",
 ) -> StockMovement:
-    """Record incoming stock (purchase, return, transfer-in)."""
+    """
+    Record incoming stock (purchase, return, transfer-in).
+    Manual adjustments MUST include a reason (BRULE-009), in either direction.
+    """
     if quantity <= 0:
         raise ValidationError("Quantity must be positive.")
+    if movement_type == StockMovementType.ADJUSTMENT and not reason.strip():
+        raise ValidationError("A reason is required for manual adjustments.")
     if movement_type not in (
         StockMovementType.PURCHASE,
         StockMovementType.RETURN,
@@ -233,6 +238,47 @@ def consume_for_sale(
                 movement_type=StockMovementType.SALE,
                 delta=-item.quantity,
                 performed_by=performed_by,
+                reference=sale.transaction_number,
+                sale=sale,
+            )
+        )
+    return movements
+
+
+@transaction.atomic
+def restore_stock_for_sale(
+    *,
+    sale,
+    performed_by,
+    reason: str,
+) -> list[StockMovement]:
+    """
+    Reverse the stock consumed by a sale (cancellation, or a full refund
+    where the goods came back). Each SALE movement recorded for the sale is
+    mirrored by a RETURN movement for the same quantity, so the ledger shows
+    both sides (BRULE-008) and only what was actually deducted is restored.
+
+    Idempotent: raises if the sale's stock has already been restored.
+    """
+    if StockMovement.objects.filter(
+        sale=sale, movement_type=StockMovementType.RETURN,
+    ).exists():
+        raise ValidationError("Stock for this sale has already been restored.")
+
+    consumed = StockMovement.objects.filter(
+        sale=sale, movement_type=StockMovementType.SALE,
+    ).select_related("product")
+
+    movements = []
+    for sale_movement in consumed:
+        movements.append(
+            _apply_movement(
+                branch=sale.branch,
+                product=sale_movement.product,
+                movement_type=StockMovementType.RETURN,
+                delta=-sale_movement.delta,  # SALE delta is negative
+                performed_by=performed_by,
+                reason=reason,
                 reference=sale.transaction_number,
                 sale=sale,
             )

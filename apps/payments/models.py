@@ -51,6 +51,16 @@ class Payment(models.Model):
         on_delete=models.PROTECT,
         related_name="payments_received",
     )
+
+    # The cash drawer this money physically went into / came out of
+    # (CASH-004). Set for cash payments and cash refunds only; reconciliation
+    # reads payments by this link rather than guessing from user + time.
+    cash_session = models.ForeignKey(
+        "cash_management.CashSession",
+        on_delete=models.PROTECT,
+        null=True, blank=True,
+        related_name="payments",
+    )
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:

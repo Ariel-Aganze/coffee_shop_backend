@@ -21,6 +21,10 @@ class RefundCreateSerializer(serializers.Serializer):
         required=False, allow_null=True, default=None,
     )
     reason = serializers.CharField(required=False, allow_blank=True, default="")
+    restock = serializers.BooleanField(
+        required=False, default=False,
+        help_text="Put the sold goods back into stock (full refunds only).",
+    )
 
 
 class CancelSerializer(serializers.Serializer):

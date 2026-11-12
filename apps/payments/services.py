@@ -17,6 +17,30 @@ def _round(value: Decimal, places: int) -> Decimal:
     return value.quantize(quant, rounding=ROUND_HALF_UP)
 
 
+def _open_session_for(*, branch_id, user):
+    """The user's open cash session at this branch, or None."""
+    from apps.cash_management.models import CashSession, CashSessionStatus
+
+    return CashSession.objects.filter(
+        branch_id=branch_id, cashier=user, status=CashSessionStatus.OPEN,
+    ).first()
+
+
+def _refund_cash_session(*, original: Payment, sale: Sale, user):
+    """
+    Pick the drawer a cash refund is paid out of:
+      1. the drawer the original cash payment went into, if still open
+         (the money is normally handed back from the same till);
+      2. otherwise the refunding user's own open drawer at this branch;
+      3. otherwise None — the refund is recorded but belongs to no drawer.
+    """
+    from apps.cash_management.models import CashSessionStatus
+
+    if original.cash_session_id and original.cash_session.status == CashSessionStatus.OPEN:
+        return original.cash_session
+    return _open_session_for(branch_id=sale.branch_id, user=user)
+
+
 # ------------------------------------------------------------------------------
 # Add payment(s) to a sale
 # ------------------------------------------------------------------------------
@@ -73,6 +97,7 @@ def add_payments_to_sale(
 
     total_new = Decimal("0")
     created: list[Payment] = []
+    cash_session = _open_session_for(branch_id=sale.branch_id, user=user)
 
     for raw in payments_payload:
         method = raw.get("method")
@@ -103,6 +128,7 @@ def add_payments_to_sale(
             currency_decimal_places=decimals,
             reference=reference,
             received_by=user,
+            cash_session=cash_session if method == PaymentMethod.CASH else None,
         ))
 
     total_new = _round(total_new, decimals)
@@ -136,7 +162,7 @@ def add_payments_to_sale(
 # ------------------------------------------------------------------------------
 @transaction.atomic
 def refund_sale(*, sale: Sale, user, amount: Decimal | None = None,
-                reason: str = "") -> Payment:
+                reason: str = "", restock: bool = False) -> Payment:
     """
     Create a refund against a sale.
 
@@ -144,10 +170,14 @@ def refund_sale(*, sale: Sale, user, amount: Decimal | None = None,
       - Refund must reference the original sale.
       - Refund amount cannot exceed the net paid amount.
       - Sale is marked REFUNDED if fully refunded.
+      - `restock=True` puts the sold goods back into inventory. Only allowed
+        on the refund that fully refunds the sale: refunds are amount-based,
+        so a partial refund can't say which items came back. Refunded drinks
+        are usually not resellable, hence the default of False.
 
     NOTE: Like `add_payments_to_sale`, we do NOT create `CashMovement`
-    rows here. `compute_expected_cash` reads refund `Payment` rows
-    directly so cash refunds reduce the expected drawer correctly.
+    rows here. `compute_expected_cash` reads refund `Payment` rows via
+    their `cash_session` link so cash refunds reduce the right drawer.
     """
     if sale.status not in (SaleStatus.COMPLETED, SaleStatus.REFUNDED):
         raise ValidationError("This sale cannot be refunded.")
@@ -194,6 +224,16 @@ def refund_sale(*, sale: Sale, user, amount: Decimal | None = None,
     if original is None:
         raise ValidationError("No original payment to refund against.")
 
+    is_full_refund = refunded + amount >= paid
+    if restock and not is_full_refund:
+        raise ValidationError(
+            "Restocking is only possible when the sale is fully refunded."
+        )
+
+    refund_session = None
+    if original.method == PaymentMethod.CASH:
+        refund_session = _refund_cash_session(original=original, sale=sale, user=user)
+
     refund = Payment.objects.create(
         sale=sale,
         method=original.method,
@@ -204,13 +244,20 @@ def refund_sale(*, sale: Sale, user, amount: Decimal | None = None,
         refunded_payment=original,
         received_by=user,
         reference=f"REF-{sale.transaction_number}",
+        cash_session=refund_session,
     )
 
     # Status update
-    total_refunded = refunded + amount
-    if total_refunded >= paid:
+    if is_full_refund:
         sale.status = SaleStatus.REFUNDED
         sale.save(update_fields=["status"])
+
+    if restock:
+        from apps.inventory.services import restore_stock_for_sale
+        restore_stock_for_sale(
+            sale=sale, performed_by=user,
+            reason=f"Refund of {sale.transaction_number}: {reason}".strip(": "),
+        )
 
     log_action(
         business=sale.business,
@@ -224,6 +271,8 @@ def refund_sale(*, sale: Sale, user, amount: Decimal | None = None,
             "refund_amount": str(amount),
             "reason": reason,
             "refund_payment_id": str(refund.pk),
+            "restocked": restock,
+            "cash_session_id": refund_session.pk if refund_session else None,
         },
     )
 
@@ -259,6 +308,13 @@ def cancel_sale(*, sale: Sale, user, reason: str = "") -> Sale:
     sale.save(update_fields=[
         "status", "cancelled_at", "cancelled_by", "cancellation_reason",
     ])
+
+    # The sale never happened, so the stock it consumed goes back (BRULE-008).
+    from apps.inventory.services import restore_stock_for_sale
+    restore_stock_for_sale(
+        sale=sale, performed_by=user,
+        reason=f"Cancellation of {sale.transaction_number}: {reason}".strip(": "),
+    )
 
     log_action(
         business=sale.business,

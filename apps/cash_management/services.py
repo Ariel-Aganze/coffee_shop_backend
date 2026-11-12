@@ -81,23 +81,18 @@ def compute_expected_cash(session: CashSession) -> dict:
 
     opening = session.opening_balance
 
+    # Payments are linked to the drawer they went through (Payment.cash_session),
+    # so a refund paid out by a manager from this cashier's till reduces THIS
+    # drawer, and nothing outside the session's lifetime can leak in.
     cash_sales = (
         Payment.objects.filter(
-            sale__branch=session.branch,
-            received_by=session.cashier,
-            method="cash",
-            is_refund=False,
-            created_at__gte=session.opened_at,
+            cash_session=session, method="cash", is_refund=False,
         )
         .aggregate(s=Sum("amount"))["s"] or Decimal("0")
     )
     cash_refunds = (
         Payment.objects.filter(
-            sale__branch=session.branch,
-            received_by=session.cashier,
-            method="cash",
-            is_refund=True,
-            created_at__gte=session.opened_at,
+            cash_session=session, method="cash", is_refund=True,
         )
         .aggregate(s=Sum("amount"))["s"] or Decimal("0")
     )

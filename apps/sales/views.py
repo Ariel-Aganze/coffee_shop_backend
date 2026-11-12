@@ -144,6 +144,7 @@ class SaleViewSet(
             user=request.user,
             amount=payload.validated_data.get("amount"),
             reason=payload.validated_data.get("reason", ""),
+            restock=payload.validated_data.get("restock", False),
         )
         sale.refresh_from_db()
         return Response(SaleReadSerializer(sale).data)

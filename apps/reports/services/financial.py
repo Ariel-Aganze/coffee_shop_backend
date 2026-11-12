@@ -5,21 +5,36 @@ from django.db.models import Sum
 from apps.expenses.models import Expense, ExpenseStatus
 from apps.sales.models import Sale, SaleItem, SaleStatus
 
-from .common import branch_scope, end_of_day, parse_range, start_of_day
+from .common import (
+    branch_scope,
+    end_of_day,
+    parse_range,
+    recognized_sales,
+    refunds_by,
+    start_of_day,
+)
 
 
 def _cogs_for_currency(sales_qs, currency: str) -> Decimal:
     """
     Sum of (current cost_price × quantity) for every SaleItem in this currency.
 
+    Fully refunded sales are excluded. (Partially refunded ones still carry
+    their full cost — the goods were consumed.)
+
     NOTE: This uses each product's CURRENT cost_price, not the cost at the
     moment of sale. That is a Phase 2 enhancement (add `cost_price_snapshot`
     to SaleItem). It is good enough for now and documented on the response.
     """
     total = Decimal("0")
+    sale_ids = (
+        sales_qs.filter(currency_code=currency)
+        .exclude(status=SaleStatus.REFUNDED)
+        .values("pk")
+    )
     items = (
         SaleItem.objects
-        .filter(sale__in=sales_qs.filter(currency_code=currency))
+        .filter(sale__in=sale_ids)
         .select_related("product")
     )
     for item in items:
@@ -46,14 +61,17 @@ def financial_summary(request) -> dict:
     )
     if scoped is not None:
         sales_qs = sales_qs.filter(branch_id__in=scoped)
+    # Only fully paid sales are revenue; refunds are netted out below.
+    sales_qs = recognized_sales(sales_qs)
 
     # ---------------- Revenue per currency ----------------
     revenue_rows = (
         sales_qs
         .values("currency_code")
-        .annotate(revenue=Sum("total_amount"))
+        .annotate(gross_sales=Sum("total_amount"))
         .order_by("currency_code")
     )
+    refunds = refunds_by(sales_qs, "currency_code")
 
     # ---------------- COGS per currency ----------------
     cogs_by_currency = {
@@ -80,7 +98,9 @@ def financial_summary(request) -> dict:
     results = []
     for row in revenue_rows:
         currency = row["currency_code"]
-        revenue = row["revenue"] or Decimal("0")
+        gross_sales = row["gross_sales"] or Decimal("0")
+        refunded = refunds.get((currency,), Decimal("0"))
+        revenue = gross_sales - refunded  # net revenue (BRULE-015)
         cogs = cogs_by_currency.get(currency, Decimal("0"))
         gross_profit = revenue - cogs
         expenses = expenses_by_currency.get(currency, Decimal("0"))
@@ -88,6 +108,8 @@ def financial_summary(request) -> dict:
 
         results.append({
             "currency_code": currency,
+            "gross_sales": str(gross_sales),
+            "refunds": str(refunded),
             "revenue": str(revenue),
             "cost_of_goods_sold": str(cogs),
             "gross_profit": str(gross_profit),
