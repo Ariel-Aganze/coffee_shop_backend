@@ -1,9 +1,27 @@
 from django.db import models
 
 
+class AuditLogImmutableError(Exception):
+    """Raised on any attempt to change or delete an audit record (AUD-010)."""
+
+
+class AuditLogQuerySet(models.QuerySet):
+    """Bulk updates and deletes are refused: the audit trail is append-only."""
+
+    def update(self, **kwargs):
+        raise AuditLogImmutableError("Audit records cannot be modified.")
+
+    def delete(self):
+        raise AuditLogImmutableError("Audit records cannot be deleted.")
+
+
 class AuditLog(models.Model):
     """
     Immutable record of important actions (AUD-001..AUD-010).
+
+    Rows can only be inserted (via apps.audit.services.log_action). Saving an
+    existing row, deleting one, or bulk update/delete through the ORM raises
+    AuditLogImmutableError; the admin and the API are read-only too.
     """
     business = models.ForeignKey(
         "businesses.Business",
@@ -34,6 +52,8 @@ class AuditLog(models.Model):
     new_value = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
+    objects = AuditLogQuerySet.as_manager()
+
     class Meta:
         ordering = ["-created_at"]
         indexes = [
@@ -43,3 +63,11 @@ class AuditLog(models.Model):
 
     def __str__(self) -> str:
         return f"{self.action} @ {self.created_at.isoformat()}"
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None and not self._state.adding:
+            raise AuditLogImmutableError("Audit records cannot be modified.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise AuditLogImmutableError("Audit records cannot be deleted.")

@@ -29,6 +29,10 @@ from .models import (
 # ------------------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------------------
+# Roles that may apply any discount (up to the line value) without a limit.
+DISCOUNT_APPROVER_ROLES = ("owner", "branch_manager")
+
+
 def _round(value: Decimal, places: int) -> Decimal:
     """
     Round monetary values using ROUND_HALF_UP (banker's rounding is NOT what
@@ -157,6 +161,7 @@ def create_sale(
     )
     currency = settings.primary_currency
     decimals = currency.decimal_places
+    max_cashier_pct = settings.cashier_max_discount_percent
 
     now = timezone.now()
 
@@ -211,6 +216,15 @@ def create_sale(
             raise ValidationError(
                 f"Discount exceeds line total for '{product.name}'."
             )
+        if line_discount > 0 and user.role not in DISCOUNT_APPROVER_ROLES:
+            # POS-008 / POS-020: cashiers may only discount within the limit
+            # the owner configured; larger discounts need a manager.
+            limit = (unit_price * qty * max_cashier_pct / 100)
+            if line_discount > limit:
+                raise ValidationError(
+                    f"Discount on '{product.name}' exceeds your limit of "
+                    f"{max_cashier_pct.normalize()}%. Ask a manager to apply it."
+                )
 
         line_total = _round(raw_line, decimals)
         subtotal += unit_price * qty
@@ -272,6 +286,7 @@ def create_sale(
             "total": str(total_amount),
             "currency": currency.code,
             "items_count": len(lines),
+            "discount_total": str(discount_total),
         },
     )
 

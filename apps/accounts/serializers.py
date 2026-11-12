@@ -33,9 +33,48 @@ class UserSerializer(serializers.ModelSerializer):
         return obj.assigned_branch_ids
 
 
+# Roles a branch manager may create and manage (RBAC 4.2 "own branch").
+BRANCH_MANAGED_ROLES = (UserRole.CASHIER, UserRole.INVENTORY_MANAGER)
+
+
+def _validate_role_for(actor, value):
+    """Which roles `actor` may give to a user (on create or update)."""
+    if value == UserRole.OWNER:
+        raise serializers.ValidationError(
+            "The owner role cannot be assigned through this endpoint."
+        )
+    if actor.role == UserRole.BRANCH_MANAGER and value not in BRANCH_MANAGED_ROLES:
+        raise serializers.ValidationError(
+            "Branch managers may only assign the cashier or inventory manager role."
+        )
+    if actor.role != UserRole.OWNER and value == UserRole.ADMIN:
+        raise serializers.ValidationError("Only the owner can assign the admin role.")
+    return value
+
+
+def _validate_branch_ids_for(actor, branch_ids):
+    """Branches must belong to the business — and, for a branch manager,
+    be among the branches they manage."""
+    valid_ids = set(
+        Branch.objects.filter(business_id=actor.business_id, id__in=branch_ids)
+        .values_list("id", flat=True)
+    )
+    if len(valid_ids) != len(set(branch_ids)):
+        raise serializers.ValidationError(
+            "One or more branches do not belong to your business."
+        )
+    if actor.role == UserRole.BRANCH_MANAGER:
+        outside = set(branch_ids) - set(actor.assigned_branch_ids)
+        if outside:
+            raise serializers.ValidationError(
+                "You can only assign staff to branches you manage."
+            )
+    return list(dict.fromkeys(branch_ids))
+
+
 class UserCreateSerializer(serializers.ModelSerializer):
     """
-    Used by owner / branch managers to create staff users.
+    Used by the owner, admins and branch managers to create staff users.
     """
     password = serializers.CharField(write_only=True, validators=[validate_password])
     branch_ids = serializers.ListField(
@@ -51,28 +90,14 @@ class UserCreateSerializer(serializers.ModelSerializer):
         read_only_fields = ("id",)
 
     def validate_role(self, value):
-        creator = self.context["request"].user
-        if creator.role == UserRole.BRANCH_MANAGER and value not in (
-            UserRole.CASHIER, UserRole.INVENTORY_MANAGER,
-        ):
-            raise serializers.ValidationError(
-                "Branch managers may only create cashiers or inventory managers."
-            )
-        if value == UserRole.OWNER:
-            raise serializers.ValidationError(
-                "Owners cannot be created via this endpoint."
-            )
-        return value
+        return _validate_role_for(self.context["request"].user, value)
 
     def validate_branch_ids(self, branch_ids):
-        business_id = self.context["request"].user.business_id
-        valid_ids = set(
-            Branch.objects.filter(business_id=business_id, id__in=branch_ids)
-            .values_list("id", flat=True)
-        )
-        if len(valid_ids) != len(branch_ids):
+        actor = self.context["request"].user
+        branch_ids = _validate_branch_ids_for(actor, branch_ids)
+        if actor.role == UserRole.BRANCH_MANAGER and not branch_ids:
             raise serializers.ValidationError(
-                "One or more branches do not belong to your business."
+                "Assign the new employee to at least one of your branches."
             )
         return branch_ids
 
@@ -103,29 +128,32 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             "role", "is_active", "branch_ids",
         )
 
+    def validate_role(self, value):
+        actor = self.context["request"].user
+        if self.instance is not None and value == self.instance.role:
+            return value  # unchanged
+        return _validate_role_for(actor, value)
+
     def validate_branch_ids(self, branch_ids):
         if branch_ids is None:
             return None
-        business_id = self.context["request"].user.business_id
-        valid_ids = set(
-            Branch.objects.filter(business_id=business_id, id__in=branch_ids)
-            .values_list("id", flat=True)
-        )
-        if len(valid_ids) != len(branch_ids):
-            raise serializers.ValidationError(
-                "One or more branches do not belong to your business."
-            )
-        return branch_ids
+        return _validate_branch_ids_for(self.context["request"].user, branch_ids)
 
     def update(self, instance, validated_data):
+        actor = self.context["request"].user
         branch_ids = validated_data.pop("branch_ids", None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
         if branch_ids is not None:
-            UserBranch.objects.filter(user=instance).delete()
+            assignments = UserBranch.objects.filter(user=instance)
+            if actor.role == UserRole.BRANCH_MANAGER:
+                # A branch manager only controls assignments to their own
+                # branches; the employee's other assignments are kept.
+                assignments = assignments.filter(branch_id__in=actor.assigned_branch_ids)
+            assignments.delete()
             for branch_id in branch_ids:
-                UserBranch.objects.create(user=instance, branch_id=branch_id)
+                UserBranch.objects.get_or_create(user=instance, branch_id=branch_id)
         return instance
 
 

@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError, PermissionDenied
 
+from apps.accounts.access import scope_to_branches
 from apps.accounts.constants import UserRole
 from apps.accounts.permissions import HasAnyRole
 from apps.branches.models import Branch
@@ -52,8 +53,13 @@ class SaleViewSet(
             "items", "payments"
         )
 
-        if user.role != UserRole.OWNER:
-            qs = qs.filter(branch_id__in=user.assigned_branch_ids)
+        qs = scope_to_branches(qs, user)
+        # RBAC 4.2 "View sales": cashiers see their own transactions only;
+        # inventory managers have no access to sales.
+        if user.role == UserRole.CASHIER:
+            qs = qs.filter(cashier=user)
+        elif user.role == UserRole.INVENTORY_MANAGER:
+            qs = qs.none()
 
         params = self.request.query_params
         branch_id = params.get("branch")
@@ -169,8 +175,30 @@ class SaleViewSet(
     # ---------------- Receipt ----------------
     @action(detail=True, methods=["get"], url_path="receipt", url_name="sale-receipt")
     def receipt(self, request, pk=None):
+        """
+        GET /api/sales/{id}/receipt/             → receipt as JSON
+        GET /api/sales/{id}/receipt/?export=pdf  → printable 80 mm PDF (POS-016)
+        Add `&download=1` to get it as a file instead of opening it inline.
+        """
         sale = self.get_object()
-        return Response(self._build_receipt(sale))
+        data = self._build_receipt(sale)
+        export = request.query_params.get("export")
+        if not export:
+            return Response(data)
+        if export != "pdf":
+            raise ValidationError("`export` must be 'pdf'.")
+
+        from django.http import HttpResponse
+
+        from .receipts import build_receipt_pdf
+
+        pdf = build_receipt_pdf(data, decimals=sale.currency_decimal_places)
+        response = HttpResponse(pdf, content_type="application/pdf")
+        disposition = "attachment" if request.query_params.get("download") else "inline"
+        response["Content-Disposition"] = (
+            f'{disposition}; filename="receipt-{sale.transaction_number}.pdf"'
+        )
+        return response
 
     @staticmethod
     def _build_receipt(sale: Sale) -> dict:

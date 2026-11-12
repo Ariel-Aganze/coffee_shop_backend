@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError, PermissionDenied
 
+from apps.accounts.access import scope_to_branches
 from apps.accounts.constants import UserRole
 from apps.accounts.permissions import HasAnyRole
 from apps.branches.models import Branch
@@ -37,8 +38,7 @@ class CashSessionViewSet(
             branch__business_id=user.business_id
         ).select_related("branch", "cashier").prefetch_related("movements")
 
-        if user.role != UserRole.OWNER:
-            qs = qs.filter(branch_id__in=user.assigned_branch_ids)
+        qs = scope_to_branches(qs, user)
 
         params = self.request.query_params
         branch_id = params.get("branch")

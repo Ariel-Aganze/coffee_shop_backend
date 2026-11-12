@@ -92,10 +92,17 @@ class ReportsTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.data["results"]), 2)
 
-    def test_cashier_only_sees_own_branch(self):
+    def test_branch_manager_only_sees_own_branch(self):
+        # (Cashiers are further limited to their own sales — see
+        # test_permissions_and_exports.py.)
+        manager = User.objects.create_user(
+            username="manager_a", password="Passw0rd!",
+            role=UserRole.BRANCH_MANAGER, business=self.business,
+        )
+        UserBranch.objects.create(user=manager, branch=self.branch_a)
         self._make_sale(self.branch_a, "2")
         self._make_sale(self.branch_b, "1")
-        self._auth(self._login("cashier_a"))
+        self._auth(self._login("manager_a"))
         resp = self.client.get("/api/reports/sales/by-branch/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.data["results"]), 1)

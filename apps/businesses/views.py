@@ -66,6 +66,14 @@ class BusinessViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return Business.objects.filter(id=self.request.user.business_id)
 
+    def get_object(self):
+        # GET/PATCH /api/businesses/me/ — always the requester's own business.
+        from django.shortcuts import get_object_or_404
+
+        obj = get_object_or_404(self.get_queryset())
+        self.check_object_permissions(self.request, obj)
+        return obj
+
     def perform_update(self, serializer):
         business = serializer.save()
         log_action(

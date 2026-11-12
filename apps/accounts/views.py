@@ -7,6 +7,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -15,6 +16,7 @@ from apps.audit.services import log_action
 
 from .models import User
 from .serializers import (
+    BRANCH_MANAGED_ROLES,
     ChangePasswordSerializer,
     LogoutSerializer,
     PasswordResetConfirmSerializer,
@@ -27,7 +29,8 @@ from .serializers import (
 
 from rest_framework import viewsets
 
-from .permissions import IsAdminOrOwner, IsOwner
+from .constants import UserRole
+from .permissions import HasAnyRole, IsAdminOrOwner, IsOwner
 
 logger = logging.getLogger(__name__)
 
@@ -197,10 +200,15 @@ def me_view(request):
 class UserViewSet(viewsets.ModelViewSet):
     """
     /api/users/
-    - List/retrieve: owner sees all; branch managers see their business staff.
-    - Create/update/delete: owner (and branch managers for their staff roles).
+    - Owner: manages every employee of the business.
+    - Admin: manages employees, but not the owner or other admins.
+    - Branch manager: manages cashiers and inventory managers assigned to
+      their own branches (RBAC 4.2 "Manage employees: own branch").
+    Accounts are deactivated, never deleted (AUTH-008). Every account and
+    permission change is audited (AUTH-011, AUD-008, 4.3).
     """
-    permission_classes = [IsAdminOrOwner]
+    permission_classes = [HasAnyRole]
+    allowed_roles = (UserRole.OWNER, UserRole.ADMIN, UserRole.BRANCH_MANAGER)
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -215,27 +223,67 @@ class UserViewSet(viewsets.ModelViewSet):
         ).exclude(id=self.request.user.id).order_by("-date_joined")
 
         # Branch managers only see users who are assigned to their branches
-        if self.request.user.role == "branch_manager":
+        if self.request.user.role == UserRole.BRANCH_MANAGER:
             their_branches = self.request.user.assigned_branch_ids
             qs = qs.filter(branch_assignments__branch_id__in=their_branches).distinct()
 
         return qs
 
+    def _check_can_manage(self, target):
+        """Writes are only allowed on users below the actor."""
+        actor = self.request.user
+        if actor.role == UserRole.OWNER:
+            return
+        if target.role in (UserRole.OWNER, UserRole.ADMIN):
+            raise PermissionDenied("Only the owner can change owner or admin accounts.")
+        if actor.role == UserRole.BRANCH_MANAGER and target.role not in BRANCH_MANAGED_ROLES:
+            raise PermissionDenied(
+                "Branch managers can only manage cashiers and inventory managers."
+            )
+
+    @staticmethod
+    def _snapshot(user) -> dict:
+        return {
+            "role": user.role,
+            "is_active": user.is_active,
+            "branch_ids": sorted(user.assigned_branch_ids),
+        }
+
+    def _audit(self, action, target, previous=None):
+        log_action(
+            business=self.request.user.business,
+            user=self.request.user,
+            action=action,
+            target_type="User",
+            target_id=str(target.pk),
+            metadata={"username": target.username},
+            previous_value=previous,
+            new_value=self._snapshot(target),
+        )
+
     def perform_create(self, serializer):
-        serializer.save()
+        user = serializer.save()
+        self._audit("user_created", user)
 
     def perform_update(self, serializer):
-        # Prevent non-owners from elevating roles to owner/admin
         instance = serializer.instance
-        if self.request.user.role != "owner":
-            forbidden = {"owner", "admin"}
-            new_role = serializer.validated_data.get("role")
-            if new_role in forbidden and instance.role != new_role:
-                from rest_framework.exceptions import PermissionDenied
-                raise PermissionDenied("Only the owner can assign this role.")
-        serializer.save()
+        self._check_can_manage(instance)
+        before = self._snapshot(instance)
+        user = serializer.save()
+        after = self._snapshot(user)
+        if before != after:
+            action = (
+                "user_deactivated" if before["is_active"] and not after["is_active"]
+                else "user_permissions_changed"
+            )
+            self._audit(action, user, previous=before)
+        else:
+            self._audit("user_updated", user, previous=before)
 
     def perform_destroy(self, instance):
         # AUTH-008: deactivate instead of hard delete for staff
+        self._check_can_manage(instance)
+        before = self._snapshot(instance)
         instance.is_active = False
         instance.save(update_fields=["is_active"])
+        self._audit("user_deactivated", instance, previous=before)

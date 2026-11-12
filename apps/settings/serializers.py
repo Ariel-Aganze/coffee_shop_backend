@@ -24,6 +24,7 @@ class BusinessSettingsSerializer(serializers.ModelSerializer):
             "timezone",
             "date_format",
             "number_format",
+            "cashier_max_discount_percent",
             "updated_at",
         )
         read_only_fields = ("id", "updated_at")

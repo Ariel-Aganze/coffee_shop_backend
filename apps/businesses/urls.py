@@ -1,12 +1,11 @@
-from django.urls import include, path
-from rest_framework.routers import DefaultRouter
+from django.urls import path
 
 from .views import BusinessRegistrationView, BusinessViewSet
 
-router = DefaultRouter()
-router.register("me", BusinessViewSet, basename="business")
+# The user's business is a singleton ("me"), routed without an /<id>/.
+business_detail = BusinessViewSet.as_view({"get": "retrieve", "patch": "partial_update"})
 
 urlpatterns = [
     path("register/", BusinessRegistrationView.as_view(), name="business-register"),
-    path("", include(router.urls)),
+    path("me/", business_detail, name="business-detail"),
 ]

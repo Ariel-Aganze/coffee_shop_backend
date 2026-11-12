@@ -1,4 +1,6 @@
-from django.core.validators import MinValueValidator
+from decimal import Decimal
+
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 
@@ -47,6 +49,15 @@ class BusinessSettings(models.Model):
     timezone = models.CharField(max_length=64, default="UTC")
     date_format = models.CharField(max_length=20, default="YYYY-MM-DD")
     number_format = models.CharField(max_length=20, default="1,234.56")
+    cashier_max_discount_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0")), MaxValueValidator(Decimal("100"))],
+        help_text=(
+            "Largest discount a cashier may apply on a sale line, as a % of "
+            "the line value (POS-008). 0 = cashiers cannot discount. Owners "
+            "and branch managers are not limited."
+        ),
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self) -> str:

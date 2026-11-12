@@ -114,10 +114,10 @@ def refunds_by(sales_qs, *keys: str) -> dict:
 
 def branch_scope(request):
     """
-    Returns a Q-like filter dict for branch scoping based on role.
-    Owners have no branch restriction.
+    Branch ids this report covers, or None for every branch of the business.
+    Applies the role rules (apps.accounts.access) and the optional
+    `?branch=<id>` filter (DASH-012).
     """
-    user = request.user
-    if user.role == "owner":
-        return None
-    return user.assigned_branch_ids
+    from apps.accounts.access import requested_branch_scope
+
+    return requested_branch_scope(request)

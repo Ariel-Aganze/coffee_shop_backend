@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 
+from apps.accounts.access import can_access_branch, scope_to_branches
 from apps.accounts.constants import UserRole
 from apps.accounts.permissions import HasAnyRole
 from apps.branches.models import Branch
@@ -43,8 +44,7 @@ class InventoryViewSet(
             branch__business_id=user.business_id
         ).select_related("branch", "product")
 
-        if user.role != UserRole.OWNER:
-            qs = qs.filter(branch_id__in=user.assigned_branch_ids)
+        qs = scope_to_branches(qs, user)
 
         params = self.request.query_params
         branch_id = params.get("branch")
@@ -94,8 +94,7 @@ class StockMovementViewSet(
             branch__business_id=user.business_id
         ).select_related("branch", "product", "performed_by", "sale")
 
-        if user.role != UserRole.OWNER:
-            qs = qs.filter(branch_id__in=user.assigned_branch_ids)
+        qs = scope_to_branches(qs, user)
 
         params = self.request.query_params
         branch_id = params.get("branch")
@@ -126,7 +125,7 @@ class StockMovementViewSet(
             raise ValidationError("Branch not found.")
         if branch.business_id != request.user.business_id:
             raise ValidationError("Branch does not belong to your business.")
-        if request.user.role != UserRole.OWNER and branch.id not in request.user.assigned_branch_ids:
+        if not can_access_branch(request.user, branch):
             raise ValidationError("You are not assigned to this branch.")
         return branch
 

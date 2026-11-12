@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError, PermissionDenied
 
+from apps.accounts.access import accessible_branch_ids
 from apps.accounts.constants import UserRole
 from apps.accounts.permissions import IsOwner
 from apps.branches.models import Branch
@@ -57,11 +58,12 @@ class ExpenseViewSet(
             business_id=user.business_id
         ).select_related("category", "branch", "submitted_by", "reviewed_by")
 
-        if user.role != UserRole.OWNER:
-            # Non-owners see expenses of their branches plus central ones
-            # they submitted.
+        allowed = accessible_branch_ids(user)
+        if allowed is not None:
+            # Branch-scoped users see expenses of their branches plus central
+            # ones they submitted.
             qs = qs.filter(
-                models.Q(branch_id__in=user.assigned_branch_ids)
+                models.Q(branch_id__in=allowed)
                 | models.Q(branch__isnull=True, submitted_by=user)
             )
 

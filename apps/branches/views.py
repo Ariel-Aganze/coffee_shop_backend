@@ -1,7 +1,8 @@
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 
-from apps.accounts.permissions import IsOwner, IsOwnerOrBranchManager
+from apps.accounts.access import scope_to_branches
+from apps.accounts.permissions import IsAdminOrOwner, IsOwner
 
 from .models import Branch
 from .serializers import BranchSerializer
@@ -14,7 +15,8 @@ class BranchViewSet(viewsets.ModelViewSet):
         if self.action in ("create", "destroy"):
             return [IsOwner()]
         if self.action in ("update", "partial_update"):
-            return [IsOwnerOrBranchManager()]
+            # RBAC 4.2 "Manage branches": owner, or an authorized admin.
+            return [IsAdminOrOwner()]
         # list / retrieve: any authenticated user, scoped by get_queryset
         return [IsAuthenticated()]
 
@@ -22,8 +24,7 @@ class BranchViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = Branch.objects.filter(business_id=user.business_id)
 
-        if user.role != "owner":
-            qs = qs.filter(id__in=user.assigned_branch_ids)
+        qs = scope_to_branches(qs, user, field="id")
 
         return qs.order_by("name")
 

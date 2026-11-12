@@ -58,8 +58,15 @@ class BusinessSettingsViewSet(viewsets.GenericViewSet,
         return [IsAuthenticated()]
 
     def perform_update(self, serializer):
-        before = {f: getattr(serializer.instance, f) for f in serializer.validated_data}
+        def jsonable(value):
+            # Audit values are stored as JSON: keep str/int/bool/None as-is,
+            # stringify everything else (e.g. Decimal).
+            return value if isinstance(value, (str, int, bool, type(None))) else str(value)
+
+        fields = list(serializer.validated_data)
+        before = {f: jsonable(getattr(serializer.instance, f)) for f in fields}
         settings = serializer.save()
+        after = {f: jsonable(getattr(settings, f)) for f in fields}
         log_action(
             business=settings.business,
             user=self.request.user,
@@ -67,13 +74,17 @@ class BusinessSettingsViewSet(viewsets.GenericViewSet,
             target_type="BusinessSettings",
             target_id=str(settings.pk),
             previous_value=before,
-            new_value={f: getattr(settings, f) for f in before},
+            new_value=after,
         )
 
     def get_object(self):
-        return BusinessSettings.objects.select_related(
-            "primary_currency"
-        ).get(business_id=self.request.user.business_id)
+        # Always the requester's own business settings (singleton "me").
+        from django.shortcuts import get_object_or_404
+
+        return get_object_or_404(
+            BusinessSettings.objects.select_related("primary_currency"),
+            business_id=self.request.user.business_id,
+        )
 
     @action(detail=False, methods=["post"], url_path="change-currency")
     def change_currency(self, request):

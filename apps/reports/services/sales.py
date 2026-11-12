@@ -15,6 +15,7 @@ from decimal import Decimal
 from django.db.models import Count, Q, Sum
 from django.db.models.functions import Coalesce
 
+from apps.accounts.constants import UserRole
 from apps.payments.models import Payment
 from apps.sales.models import Sale, SaleItem, SaleStatus
 
@@ -42,6 +43,9 @@ def _base_sales_qs(request, *, currency_code=None):
     scoped = branch_scope(request)
     if scoped is not None:
         qs = qs.filter(branch_id__in=scoped)
+    # RBAC 4.2: a cashier's view of sales is limited to their own transactions.
+    if request.user.role == UserRole.CASHIER:
+        qs = qs.filter(cashier=request.user)
     if currency_code:
         qs = qs.filter(currency_code=currency_code)
     return qs, f, t

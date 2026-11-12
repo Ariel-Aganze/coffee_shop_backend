@@ -4,6 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
+from apps.accounts.access import can_access_branch
 from apps.audit.services import log_action
 from apps.branches.models import Branch
 from apps.settings.models import BusinessSettings
@@ -35,7 +36,7 @@ def create_expense(
     if branch is not None:
         if branch.business_id != user.business_id:
             raise ValidationError("Branch does not belong to your business.")
-        if user.role != "owner" and branch.id not in user.assigned_branch_ids:
+        if not can_access_branch(user, branch):
             raise ValidationError("You are not assigned to this branch.")
 
     if amount <= 0:

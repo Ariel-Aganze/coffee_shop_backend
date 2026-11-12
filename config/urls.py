@@ -40,7 +40,7 @@ urlpatterns = [
 
     path("api/", include("apps.notifications.urls")),
 
-    
+    path("api/audit/", include("apps.audit.urls")),
 ]
 
 if settings.DEBUG:

@@ -5,6 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
+from apps.accounts.access import scope_to_branches
 from apps.accounts.constants import UserRole
 from apps.accounts.permissions import HasAnyRole
 from apps.audit.services import log_action
@@ -194,8 +195,7 @@ class BranchProductAvailabilityViewSet(
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
 
-        if self.request.user.role != UserRole.OWNER:
-            qs = qs.filter(branch_id__in=self.request.user.assigned_branch_ids)
+        qs = scope_to_branches(qs, self.request.user)
 
         return qs
 

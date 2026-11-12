@@ -51,7 +51,7 @@ class SecurityFixTests(TestCase):
     # ---------------- #1 Business settings / currency ----------------
     def test_cashier_cannot_patch_settings(self):
         self.client.force_authenticate(self.cashier)
-        resp = self.client.patch(f"/api/settings/me/{self.settings.id}/", {"timezone": "Africa/Kigali"},
+        resp = self.client.patch(f"/api/settings/me/", {"timezone": "Africa/Kigali"},
                                  format="json")
         self.assertEqual(resp.status_code, 403)
         self.settings.refresh_from_db()
@@ -59,7 +59,7 @@ class SecurityFixTests(TestCase):
 
     def test_patch_cannot_change_currency_even_for_owner(self):
         self.client.force_authenticate(self.owner)
-        resp = self.client.patch(f"/api/settings/me/{self.settings.id}/",
+        resp = self.client.patch(f"/api/settings/me/",
                                  {"primary_currency_code": "USD"}, format="json")
         self.assertEqual(resp.status_code, 200)  # field is ignored, not applied
         self.settings.refresh_from_db()
@@ -68,7 +68,7 @@ class SecurityFixTests(TestCase):
 
     def test_owner_can_patch_regional_settings_and_it_is_audited(self):
         self.client.force_authenticate(self.owner)
-        resp = self.client.patch(f"/api/settings/me/{self.settings.id}/", {"timezone": "Africa/Kigali"},
+        resp = self.client.patch(f"/api/settings/me/", {"timezone": "Africa/Kigali"},
                                  format="json")
         self.assertEqual(resp.status_code, 200)
         self.settings.refresh_from_db()
@@ -153,7 +153,7 @@ class SecurityFixTests(TestCase):
     # ---------------- #4 Business profile ----------------
     def test_cashier_cannot_edit_business(self):
         self.client.force_authenticate(self.cashier)
-        resp = self.client.patch(f"/api/businesses/me/{self.business.id}/",
+        resp = self.client.patch(f"/api/businesses/me/",
                                  {"name": "Hijacked"}, format="json")
         self.assertEqual(resp.status_code, 403)
         self.business.refresh_from_db()
@@ -161,12 +161,12 @@ class SecurityFixTests(TestCase):
 
     def test_cashier_can_view_business(self):
         self.client.force_authenticate(self.cashier)
-        resp = self.client.get(f"/api/businesses/me/{self.business.id}/")
+        resp = self.client.get(f"/api/businesses/me/")
         self.assertEqual(resp.status_code, 200)
 
     def test_owner_can_edit_business(self):
         self.client.force_authenticate(self.owner)
-        resp = self.client.patch(f"/api/businesses/me/{self.business.id}/",
+        resp = self.client.patch(f"/api/businesses/me/",
                                  {"name": "Renamed Cafe"}, format="json")
         self.assertEqual(resp.status_code, 200)
         self.business.refresh_from_db()

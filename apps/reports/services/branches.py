@@ -22,9 +22,13 @@ def branch_comparison(request) -> dict:
     """
     DASH-013, REP-005: side-by-side metrics per branch.
     """
-    if request.user.role != "owner":
+    from apps.accounts.access import has_business_wide_access
+
+    if not has_business_wide_access(request.user):
         from rest_framework.exceptions import PermissionDenied
-        raise PermissionDenied("Only the owner can compare branches.")
+        raise PermissionDenied(
+            "Only users with access to all branches can compare branches."
+        )
 
     f, t = parse_range(request)
     sales_qs = Sale.objects.filter(

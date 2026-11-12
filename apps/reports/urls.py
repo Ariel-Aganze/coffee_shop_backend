@@ -4,6 +4,7 @@ from .views import (
     BranchComparisonView,
     CashReconciliationReportView,
     CurrentStockView,
+    DashboardView,
     ExpensesReportView,
     FinancialSummaryView,
     LowStockView,
@@ -16,6 +17,7 @@ from .views import (
 )
 
 urlpatterns = [
+    path("dashboard/", DashboardView.as_view(), name="rep-dashboard"),
     path("sales/summary/", SalesSummaryView.as_view(), name="rep-sales-summary"),
     path("sales/by-branch/", SalesByBranchView.as_view(), name="rep-sales-branch"),
     path("sales/by-product/", SalesByProductView.as_view(), name="rep-sales-product"),
