@@ -1,13 +1,27 @@
 from django.conf import settings
-from django.conf.urls.static import static
 from django.contrib import admin
-from django.http import JsonResponse
-from django.urls import include, path
+from django.http import Http404, JsonResponse
+from django.urls import include, path, re_path
+from django.views.static import serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 
 def health_check(_request):
     return JsonResponse({"status": "ok"})
+
+
+# Uploaded files anyone may load: product photos and business logos. Expense
+# receipts are private and only downloadable through the API.
+PUBLIC_MEDIA_PREFIXES = ("products/", "business/")
+
+
+def public_media(request, path):
+    if not path.startswith(PUBLIC_MEDIA_PREFIXES) or ".." in path:
+        raise Http404
+    response = serve(request, path, document_root=settings.MEDIA_ROOT)
+    response["Cache-Control"] = "public, max-age=86400"
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 urlpatterns = [
@@ -43,5 +57,4 @@ urlpatterns = [
     path("api/audit/", include("apps.audit.urls")),
 ]
 
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+urlpatterns += [re_path(r"^media/(?P<path>.+)$", public_media, name="public-media")]

@@ -1,11 +1,13 @@
+import mimetypes
 from decimal import Decimal
 
 from django.db.models import Count, Q, Sum
+from django.http import FileResponse
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -200,6 +202,33 @@ class ExpenseViewSet(
         if not kwargs.get("partial"):
             return self.http_method_not_allowed(request, *args, **kwargs)
         return super().update(request, *args, **kwargs)
+
+    # ---------- Receipt download ----------
+    @extend_schema(
+        summary="Download an expense's receipt",
+        description="The attached receipt, for users who can see the expense. "
+                    "Receipts are never served from a public URL.",
+        responses={(200, "application/octet-stream"): OpenApiTypes.BINARY},
+    )
+    @action(detail=True, methods=["get"], url_path="attachment")
+    def attachment(self, request, pk=None):
+        expense = self.get_object()  # scoped by _visible(): 404 for others
+        if not expense.attachment:
+            raise NotFound("This expense has no receipt.")
+        try:
+            handle = expense.attachment.open("rb")
+        except FileNotFoundError:
+            raise NotFound("The receipt file is no longer available.")
+        name = expense.attachment.name.rsplit("/", 1)[-1]
+        response = FileResponse(
+            handle, filename=name,
+            content_type=mimetypes.guess_type(name)[0] or "application/octet-stream",
+        )
+        response["X-Content-Type-Options"] = "nosniff"
+        # Uploaded content: never let it run scripts if opened directly.
+        response["Content-Security-Policy"] = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox"
+        response["Cache-Control"] = "private, no-store"
+        return response
 
     # ---------- Totals for the current filters ----------
     @extend_schema(parameters=LIST_PARAMETERS, responses=ExpenseSummarySerializer)

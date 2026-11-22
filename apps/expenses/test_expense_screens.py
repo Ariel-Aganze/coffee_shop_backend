@@ -131,3 +131,55 @@ class SummaryTests(ExpenseBase):
         self.client.force_authenticate(self.manager)  # can't see the other branch
         mine = self.client.get("/api/expenses/summary/").data
         self.assertEqual(Decimal(mine["pending_total"]), Decimal("2500"))
+
+
+class ReceiptPrivacyTests(ExpenseBase):
+    """Receipts are only downloadable by people who can see the expense."""
+
+    def setUp(self):
+        super().setUp()
+        res = self.file(self.manager, attachment=SimpleUploadedFile(
+            "receipt.pdf", b"%PDF-1.4 milk", content_type="application/pdf"))
+        self.expense = Expense.objects.get(pk=res.data["id"])
+        self.url = f"/api/expenses/{self.expense.pk}/attachment/"
+
+    def test_link_points_at_the_api_not_public_media(self):
+        self.client.force_authenticate(self.owner)
+        data = self.client.get(f"/api/expenses/{self.expense.pk}/").data
+        self.assertTrue(data["attachment"].endswith(self.url))
+        self.assertNotIn("/media/", data["attachment"])
+
+    def test_owner_and_submitter_download_it(self):
+        for user in (self.owner, self.manager):
+            self.client.force_authenticate(user)
+            res = self.client.get(self.url)
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(b"".join(res.streaming_content), b"%PDF-1.4 milk")
+            self.assertEqual(res["Content-Type"], "application/pdf")
+            self.assertIn("sandbox", res["Content-Security-Policy"])
+
+    def test_others_get_nothing(self):
+        from apps.accounts.constants import UserRole
+        from apps.accounts.models import User, UserBranch
+        outsider = User.objects.create_user(username="other_mgr", password="Passw0rd!",
+                                            role=UserRole.BRANCH_MANAGER, business=self.business)
+        UserBranch.objects.create(user=outsider, branch=self.other_branch)
+        self.client.force_authenticate(outsider)
+        self.assertEqual(self.client.get(self.url).status_code, 404)
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get(self.url).status_code, 401)
+
+    def test_the_file_is_not_reachable_under_media(self):
+        self.client.force_authenticate(None)
+        res = self.client.get(f"/media/{self.expense.attachment.name}")
+        self.assertEqual(res.status_code, 404)
+
+    def test_product_photos_are_public(self):
+        import os
+        os.makedirs(os.path.join(TEMP_MEDIA, "products"), exist_ok=True)
+        with open(os.path.join(TEMP_MEDIA, "products", "latte.png"), "wb") as fh:
+            fh.write(b"\x89PNG")
+        self.client.force_authenticate(None)
+        res = self.client.get("/media/products/latte.png")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(self.client.get("/media/products/../expenses/x.pdf").status_code, 404)

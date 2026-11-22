@@ -64,6 +64,7 @@ class ExpenseSerializer(serializers.ModelSerializer):
         source="reviewed_by.username", read_only=True, allow_null=True, default=None,
     )
     reviewed_by_name = serializers.SerializerMethodField()
+    attachment = serializers.SerializerMethodField()
     attachment_name = serializers.SerializerMethodField()
 
     class Meta:
@@ -102,6 +103,16 @@ class ExpenseSerializer(serializers.ModelSerializer):
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_reviewed_by_name(self, obj):
         return _name(obj.reviewed_by)
+
+    @extend_schema_field(serializers.URLField(allow_null=True))
+    def get_attachment(self, obj):
+        """Receipts are private: this is the signed-in download endpoint, never
+        a public /media/ URL."""
+        if not obj.attachment:
+            return None
+        path = f"/api/expenses/{obj.pk}/attachment/"
+        request = self.context.get("request")
+        return request.build_absolute_uri(path) if request else path
 
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_attachment_name(self, obj):
