@@ -1,47 +1,72 @@
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.accounts.access import can_see_costs
-
-from apps.branches.models import Branch
-from django.core.validators import MinValueValidator
-from drf_spectacular.utils import extend_schema_field
-
+from config.uploads import validate_image_upload
 
 from .models import (
     BranchProductAvailability,
     Category,
     Product,
     ProductPrice,
-    ProductType,
 )
+
+# A price may start "now" give or take clock drift between browser and server;
+# anything earlier would rewrite what past sales and reports were based on.
+PRICE_BACKDATE_GRACE = timedelta(minutes=5)
+
+
+def _request_user(serializer):
+    request = serializer.context.get("request")
+    return getattr(request, "user", None)
+
+
+def _business_id(serializer):
+    return serializer.context["request"].user.business_id
 
 
 # ------------------------------------------------------------------------------
 # Category
 # ------------------------------------------------------------------------------
 class CategorySerializer(serializers.ModelSerializer):
+    product_count = serializers.SerializerMethodField(
+        help_text="Active products in this category.")
+
     class Meta:
         model = Category
-        fields = ("id", "name", "description", "is_active", "created_at", "updated_at")
+        fields = ("id", "name", "description", "is_active", "product_count",
+                  "created_at", "updated_at")
         read_only_fields = ("id", "created_at", "updated_at")
+
+    @extend_schema_field(serializers.IntegerField())
+    def get_product_count(self, obj) -> int:
+        if hasattr(obj, "active_product_count"):
+            return obj.active_product_count
+        return obj.products.filter(is_active=True).count()
+
+    def validate_name(self, value):
+        value = value.strip()
+        qs = Category.objects.filter(business_id=_business_id(self), name__iexact=value)
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("A category with this name already exists.")
+        return value
 
 
 # ------------------------------------------------------------------------------
 # ProductPrice
 # ------------------------------------------------------------------------------
-def _request_user(serializer):
-    request = serializer.context.get("request")
-    return getattr(request, "user", None)
-
-
 class ProductPriceSerializer(serializers.ModelSerializer):
     created_by_display = serializers.CharField(
-        source="created_by.username", read_only=True
+        source="created_by.username", read_only=True, allow_null=True, default=None
     )
+    created_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductPrice
@@ -50,11 +75,20 @@ class ProductPriceSerializer(serializers.ModelSerializer):
             "selling_price",
             "cost_price",
             "effective_from",
+            "reason",
             "created_by",
             "created_by_display",
+            "created_by_name",
             "created_at",
         )
         read_only_fields = ("id", "created_by", "created_at")
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_created_by_name(self, obj):
+        user = obj.created_by
+        if user is None:
+            return None
+        return user.get_full_name() or user.username
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -67,9 +101,13 @@ class ProductPriceSerializer(serializers.ModelSerializer):
 # Product (read)
 # ------------------------------------------------------------------------------
 class ProductSerializer(serializers.ModelSerializer):
-    category_name = serializers.CharField(source="category.name", read_only=True)
+    category_name = serializers.CharField(source="category.name", read_only=True,
+                                          allow_null=True, default=None)
     current_price = serializers.SerializerMethodField()
     current_cost_price = serializers.SerializerMethodField()
+    hidden_branch_ids = serializers.SerializerMethodField(
+        help_text="Branches where this product is switched off (PROD-008). "
+                  "Every other branch sells it.")
 
     class Meta:
         model = Product
@@ -82,9 +120,11 @@ class ProductSerializer(serializers.ModelSerializer):
             "category",
             "category_name",
             "product_type",
+            "unit",
             "is_active",
             "current_price",
             "current_cost_price",
+            "hidden_branch_ids",
             "created_at",
             "updated_at",
         )
@@ -107,6 +147,13 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_current_cost_price(self, obj):
         return self._price(obj, "cost_price")
 
+    @extend_schema_field(serializers.ListField(child=serializers.IntegerField()))
+    def get_hidden_branch_ids(self, obj):
+        rows = getattr(obj, "hidden_availabilities", None)
+        if rows is None:  # not prefetched (single object)
+            rows = obj.branch_availabilities.filter(is_available=False)
+        return sorted(r.branch_id for r in rows)
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         if not can_see_costs(_request_user(self)):
@@ -117,8 +164,38 @@ class ProductSerializer(serializers.ModelSerializer):
 # ------------------------------------------------------------------------------
 # Product (write)
 # ------------------------------------------------------------------------------
+class _ProductWriteMixin:
+    """Checks shared by create and update."""
 
-class ProductCreateSerializer(serializers.ModelSerializer):
+    def validate_image(self, value):
+        return validate_image_upload(value, "The image")
+
+    def validate_category(self, value):
+        if value is None:
+            return value
+        if value.business_id != _business_id(self):
+            raise serializers.ValidationError("Category does not belong to your business.")
+        current = getattr(self.instance, "category_id", None)
+        if not value.is_active and value.pk != current:
+            raise serializers.ValidationError(
+                "This category is deactivated. Reactivate it or choose another one.")
+        return value
+
+    def validate_sku(self, value):
+        value = value.strip()
+        qs = Product.objects.filter(business_id=_business_id(self), sku__iexact=value)
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(
+                "A product with this SKU already exists in your business.")
+        return value
+
+    def validate_name(self, value):
+        return value.strip()
+
+
+class ProductCreateSerializer(_ProductWriteMixin, serializers.ModelSerializer):
     initial_selling_price = serializers.DecimalField(
         max_digits=14, decimal_places=4, write_only=True,
         min_value=Decimal("0"),
@@ -138,26 +215,12 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             "image",
             "category",
             "product_type",
+            "unit",
             "is_active",
             "initial_selling_price",
             "initial_cost_price",
         )
         read_only_fields = ("id",)
-
-    def validate_category(self, value):
-        if value and value.business_id != self.context["request"].user.business_id:
-            raise serializers.ValidationError(
-                "Category does not belong to your business."
-            )
-        return value
-
-    def validate_sku(self, value):
-        business_id = self.context["request"].user.business_id
-        if Product.objects.filter(business_id=business_id, sku=value).exists():
-            raise serializers.ValidationError(
-                "A product with this SKU already exists in your business."
-            )
-        return value
 
     @transaction.atomic
     def create(self, validated_data):
@@ -172,14 +235,15 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             cost_price=cost,
             effective_from=timezone.now(),
             created_by=user,
+            reason="Initial price",
         )
         return product
 
 
-class ProductUpdateSerializer(serializers.ModelSerializer):
+class ProductUpdateSerializer(_ProductWriteMixin, serializers.ModelSerializer):
     """
     Updates product metadata only. To change price, use the
-    /products/{id}/prices/ endpoint.
+    /products/{id}/prices/ endpoint. Send `image: null` to remove the photo.
     """
 
     class Meta:
@@ -191,27 +255,9 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             "image",
             "category",
             "product_type",
+            "unit",
             "is_active",
         )
-
-    def validate_category(self, value):
-        if value and value.business_id != self.context["request"].user.business_id:
-            raise serializers.ValidationError(
-                "Category does not belong to your business."
-            )
-        return value
-
-    def validate_sku(self, value):
-        business_id = self.context["request"].user.business_id
-        if (
-            Product.objects.filter(business_id=business_id, sku=value)
-            .exclude(pk=self.instance.pk)
-            .exists()
-        ):
-            raise serializers.ValidationError(
-                "A product with this SKU already exists in your business."
-            )
-        return value
 
 
 # ------------------------------------------------------------------------------
@@ -225,8 +271,19 @@ class ProductPriceCreateSerializer(serializers.Serializer):
         max_digits=14, decimal_places=4, min_value=Decimal("0"),
         required=False, default=Decimal("0"),
     )
-    effective_from = serializers.DateTimeField(required=False)
-    reason = serializers.CharField(required=False, allow_blank=True, default="")
+    effective_from = serializers.DateTimeField(
+        required=False,
+        help_text="When the price starts. Omit for immediately; a future time "
+                  "schedules it. Past times are refused (PROD-009).")
+    reason = serializers.CharField(required=False, allow_blank=True, default="",
+                                   max_length=255)
+
+    def validate_effective_from(self, value):
+        if value < timezone.now() - PRICE_BACKDATE_GRACE:
+            raise serializers.ValidationError(
+                "A price can't start in the past: past sales keep the price they "
+                "were sold at. Leave it empty to start now, or pick a future time.")
+        return value
 
 
 # ------------------------------------------------------------------------------
@@ -250,11 +307,37 @@ class BranchProductAvailabilitySerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "updated_at")
 
     def validate(self, attrs):
-        request = self.context["request"]
+        from apps.accounts.access import can_access_branch
+
+        user = self.context["request"].user
         branch = attrs.get("branch") or getattr(self.instance, "branch", None)
         product = attrs.get("product") or getattr(self.instance, "product", None)
-        if branch and branch.business_id != request.user.business_id:
-            raise serializers.ValidationError("Branch does not belong to your business.")
-        if product and product.business_id != request.user.business_id:
+        if branch and not can_access_branch(user, branch):
+            raise serializers.ValidationError({"branch": "You do not have access to this branch."})
+        if product and product.business_id != user.business_id:
             raise serializers.ValidationError("Product does not belong to your business.")
         return attrs
+
+
+class ProductBranchAvailabilitySerializer(serializers.Serializer):
+    """One branch's row in a product's availability panel."""
+    branch = serializers.IntegerField()
+    branch_name = serializers.CharField()
+    is_available = serializers.BooleanField()
+    can_edit = serializers.BooleanField(
+        help_text="Whether the caller may switch this branch on or off.")
+
+
+class _AvailabilityChange(serializers.Serializer):
+    branch = serializers.IntegerField()
+    is_available = serializers.BooleanField()
+
+
+class ProductAvailabilityUpdateSerializer(serializers.Serializer):
+    branches = _AvailabilityChange(many=True, allow_empty=False)
+
+    def validate_branches(self, value):
+        ids = [row["branch"] for row in value]
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError("Each branch may appear only once.")
+        return value

@@ -8,7 +8,7 @@ from apps.accounts.access import scope_to_branches
 from apps.accounts.constants import UserRole
 from apps.accounts.permissions import HasAnyRole
 from apps.branches.models import Branch
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 
 from .models import CashSession
 from .serializers import (
@@ -26,6 +26,11 @@ from .services import (
 )
 
 
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter("branch", int, description="Only sessions of this branch."),
+    OpenApiParameter("status", str, enum=["open", "closed"]),
+    OpenApiParameter("cashier", int, description="Only sessions of this cashier (user id)."),
+]))
 class CashSessionViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
@@ -42,6 +47,9 @@ class CashSessionViewSet(
         ).select_related("branch", "cashier").prefetch_related("movements")
 
         qs = scope_to_branches(qs, user)
+        # A cashier is answerable for their own drawer only.
+        if user.role == UserRole.CASHIER:
+            qs = qs.filter(cashier=user)
 
         params = self.request.query_params
         branch_id = params.get("branch")
@@ -109,7 +117,8 @@ class CashSessionViewSet(
     @action(detail=True, methods=["get"], url_path="reconciliation")
     def reconciliation(self, request, pk=None):
         session = self.get_object()
-        return Response(compute_expected_cash(session))
+        # Through the serializer so amounts are decimal strings, as documented.
+        return Response(ReconciliationSerializer(compute_expected_cash(session)).data)
 
     # ---------- Manual movement ----------
     @extend_schema(request=CashMovementCreateSerializer, responses={201: CashSessionSerializer})

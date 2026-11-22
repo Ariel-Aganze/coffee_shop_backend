@@ -3,14 +3,18 @@ from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 
 from config.schema import UnreadCountSerializer, UpdatedCountSerializer
 
-from .models import Notification
+from .models import Notification, NotificationType
 from .serializers import NotificationSerializer
 
 
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter("unread", bool, description="Only unread ones."),
+    OpenApiParameter("type", str, enum=NotificationType.values),
+]))
 class NotificationViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,

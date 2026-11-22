@@ -1,4 +1,5 @@
 from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
@@ -27,12 +28,15 @@ class UserSerializer(serializers.ModelSerializer):
             "is_active",
             "branch_ids",
             "date_joined",
+            "last_login",
         )
-        read_only_fields = ("id", "date_joined")
+        read_only_fields = ("id", "date_joined", "last_login")
 
     @extend_schema_field(serializers.ListField(child=serializers.IntegerField()))
     def get_branch_ids(self, obj):
-        return obj.assigned_branch_ids
+        # .all() uses prefetch_related("branch_assignments") when the list
+        # view prefetched it, instead of one query per user.
+        return sorted(a.branch_id for a in obj.branch_assignments.all())
 
 
 # Roles a branch manager may create and manage (RBAC 4.2 "own branch").
@@ -74,11 +78,24 @@ def _validate_branch_ids_for(actor, branch_ids):
     return list(dict.fromkeys(branch_ids))
 
 
+
+def _validate_unique_email(value, instance=None):
+    """Email identifies an account for password resets: unique, any case."""
+    value = (value or "").strip()
+    if value:
+        qs = User.objects.filter(email__iexact=value)
+        if instance is not None:
+            qs = qs.exclude(pk=instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("This email is already used by another account.")
+    return value
+
+
 class UserCreateSerializer(serializers.ModelSerializer):
     """
     Used by the owner, admins and branch managers to create staff users.
     """
-    password = serializers.CharField(write_only=True, validators=[validate_password])
+    password = serializers.CharField(write_only=True)
     branch_ids = serializers.ListField(
         child=serializers.IntegerField(), write_only=True, required=False, default=list,
     )
@@ -93,6 +110,26 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     def validate_role(self, value):
         return _validate_role_for(self.context["request"].user, value)
+
+    def validate_username(self, value):
+        if User.objects.filter(username__iexact=value).exists():
+            raise serializers.ValidationError("This username is already taken.")
+        return value
+
+    def validate_email(self, value):
+        return _validate_unique_email(value)
+
+    def validate(self, attrs):
+        # Full password rules, including similarity to the new user's details.
+        candidate = User(
+            username=attrs.get("username", ""), email=attrs.get("email", ""),
+            first_name=attrs.get("first_name", ""), last_name=attrs.get("last_name", ""),
+        )
+        try:
+            validate_password(attrs.get("password", ""), user=candidate)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"password": list(exc.messages)})
+        return attrs
 
     def validate_branch_ids(self, branch_ids):
         actor = self.context["request"].user
@@ -136,6 +173,9 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             return value  # unchanged
         return _validate_role_for(actor, value)
 
+    def validate_email(self, value):
+        return _validate_unique_email(value, self.instance)
+
     def validate_branch_ids(self, branch_ids):
         if branch_ids is None:
             return None
@@ -161,13 +201,30 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
 class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(write_only=True)
-    new_password = serializers.CharField(write_only=True, validators=[validate_password])
+    new_password = serializers.CharField(write_only=True)
 
     def validate_old_password(self, value):
         user = self.context["request"].user
         if not user.check_password(value):
             raise serializers.ValidationError("Current password is incorrect.")
         return value
+
+    def validate_new_password(self, value):
+        user = self.context["request"].user
+        # Pass the user so "too similar to your username/name/email" is checked.
+        validate_password(value, user=user)
+        if user.check_password(value):
+            raise serializers.ValidationError(
+                "Choose a password different from your current one."
+            )
+        return value
+
+
+class PasswordChangedSerializer(serializers.Serializer):
+    """Response of change-password: fresh tokens for this device (others are signed out)."""
+    detail = serializers.CharField()
+    access = serializers.CharField()
+    refresh = serializers.CharField()
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
@@ -177,16 +234,22 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 class PasswordResetConfirmSerializer(serializers.Serializer):
     uid = serializers.CharField()
     token = serializers.CharField()
-    new_password = serializers.CharField(validators=[validate_password])
+    new_password = serializers.CharField(write_only=True)
+
+    INVALID_LINK = "This reset link is invalid or has expired. Request a new one."
 
     def validate(self, attrs):
         try:
             user_id = force_str(urlsafe_base64_decode(attrs["uid"]))
-            user = User.objects.get(pk=user_id)
+            user = User.objects.get(pk=user_id, is_active=True)
         except (User.DoesNotExist, ValueError, TypeError, OverflowError):
-            raise serializers.ValidationError("Invalid reset link.")
+            raise serializers.ValidationError({"token": [self.INVALID_LINK]})
         if not default_token_generator.check_token(user, attrs["token"]):
-            raise serializers.ValidationError("Invalid or expired token.")
+            raise serializers.ValidationError({"token": [self.INVALID_LINK]})
+        try:
+            validate_password(attrs["new_password"], user=user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"new_password": list(exc.messages)})
         attrs["user"] = user
         return attrs
 
@@ -204,7 +267,7 @@ def build_uid_token(user):
 # ------------------------------------------------------------------------------
 # Documentation-only shapes (OpenAPI) for the auth endpoints
 # ------------------------------------------------------------------------------
-class LoginRequestSerializer(serializers.Serializer):
+class LoginCredentialsSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
 
@@ -213,3 +276,31 @@ class LoginResponseSerializer(serializers.Serializer):
     access = serializers.CharField()
     refresh = serializers.CharField()
     user = UserSerializer()
+
+
+class MeUpdateSerializer(serializers.ModelSerializer):
+    """
+    PATCH /api/auth/me/ — a user edits their OWN contact details. Role,
+    branches and active status are deliberately not editable here (those are
+    managed by the owner / managers through /api/auth/users/).
+    """
+
+    class Meta:
+        model = User
+        fields = ("first_name", "last_name", "email", "phone")
+
+    def validate_email(self, value):
+        value = value.strip()
+        if value and User.objects.filter(email__iexact=value).exclude(pk=self.instance.pk).exists():
+            # Email identifies the account for password resets: keep it unique.
+            raise serializers.ValidationError("This email is already used by another account.")
+        return value
+
+
+class SetPasswordSerializer(serializers.Serializer):
+    """POST /api/auth/users/{id}/set-password/ — owner/manager sets a staff password."""
+    new_password = serializers.CharField(write_only=True)
+
+    def validate_new_password(self, value):
+        validate_password(value, user=self.context["target"])
+        return value

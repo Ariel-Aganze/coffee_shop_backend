@@ -7,7 +7,8 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -18,8 +19,11 @@ from .models import User
 from .serializers import (
     BRANCH_MANAGED_ROLES,
     ChangePasswordSerializer,
-    LoginRequestSerializer,
+    LoginCredentialsSerializer,
     LoginResponseSerializer,
+    MeUpdateSerializer,
+    PasswordChangedSerializer,
+    SetPasswordSerializer,
     LogoutSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
@@ -29,8 +33,9 @@ from .serializers import (
     build_uid_token,
 )
 
+from django.db.models import F, Q
 from rest_framework import viewsets
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 
 from config.schema import DetailSerializer, ErrorSerializer
 
@@ -38,6 +43,24 @@ from .constants import UserRole
 from .permissions import HasAnyRole, IsAdminOrOwner, IsOwner
 
 logger = logging.getLogger(__name__)
+
+
+def revoke_all_sessions(user) -> int:
+    """
+    Blacklist every refresh token issued to `user`, signing them out on all
+    devices once their short-lived access token expires. Returns how many
+    sessions were revoked.
+    """
+    from rest_framework_simplejwt.token_blacklist.models import (
+        BlacklistedToken,
+        OutstandingToken,
+    )
+
+    revoked = 0
+    for token in OutstandingToken.objects.filter(user=user, blacklistedtoken__isnull=True):
+        BlacklistedToken.objects.get_or_create(token=token)
+        revoked += 1
+    return revoked
 
 
 class LoginView(APIView):
@@ -49,7 +72,7 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
-    @extend_schema(request=LoginRequestSerializer, responses={200: LoginResponseSerializer, 400: ErrorSerializer, 401: ErrorSerializer, 403: ErrorSerializer}, auth=[])
+    @extend_schema(request=LoginCredentialsSerializer, responses={200: LoginResponseSerializer, 400: ErrorSerializer, 401: ErrorSerializer, 403: ErrorSerializer}, auth=[])
     def post(self, request):
         username = request.data.get("username", "").strip()
         password = request.data.get("password", "")
@@ -117,17 +140,28 @@ class ChangePasswordView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(request=ChangePasswordSerializer, responses=DetailSerializer)
+    @extend_schema(
+        request=ChangePasswordSerializer,
+        responses={200: PasswordChangedSerializer, 400: ErrorSerializer},
+    )
     def post(self, request):
         serializer = ChangePasswordSerializer(
             data=request.data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
-        request.user.set_password(serializer.validated_data["new_password"])
-        request.user.save(update_fields=["password"])
-        log_action(user=request.user, business=request.user.business,
-                   action="password_changed")
-        return Response({"detail": "Password updated successfully."})
+        user = request.user
+        user.set_password(serializer.validated_data["new_password"])
+        user.save(update_fields=["password"])
+        # Sign out every other device, then keep this one signed in.
+        revoked = revoke_all_sessions(user)
+        refresh = RefreshToken.for_user(user)
+        log_action(user=user, business=user.business, action="password_changed",
+                   metadata={"sessions_revoked": revoked})
+        return Response({
+            "detail": "Password updated. You've been signed out on other devices.",
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+        })
 
 
 class PasswordResetRequestView(APIView):
@@ -190,26 +224,46 @@ class PasswordResetConfirmView(APIView):
         user = serializer.validated_data["user"]
         user.set_password(serializer.validated_data["new_password"])
         user.save(update_fields=["password"])
-        log_action(user=user, business=user.business, action="password_reset")
+        # Whoever had a session (possibly the reason for the reset) loses it.
+        revoked = revoke_all_sessions(user)
+        log_action(user=user, business=user.business, action="password_reset",
+                   metadata={"sessions_revoked": revoked})
         return Response({"detail": "Password has been reset."})
 
 
-@extend_schema(responses=UserSerializer)
-@api_view(["GET"])
+@extend_schema(methods=["GET"], responses=UserSerializer)
+@extend_schema(methods=["PATCH"], request=MeUpdateSerializer, responses=UserSerializer)
+@api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])
 def me_view(request):
     """
-    GET /api/auth/me/
-    Returns the authenticated user's profile.
+    GET   /api/auth/me/   the signed-in user's profile
+    PATCH /api/auth/me/   update own name, email and phone
     """
-    return Response(UserSerializer(request.user).data)
+    user = request.user
+    if request.method == "PATCH":
+        serializer = MeUpdateSerializer(user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        fields = sorted(serializer.validated_data)
+        before = {f: getattr(user, f) for f in fields}
+        serializer.save()
+        log_action(user=user, business=user.business, action="profile_updated",
+                   target_type="User", target_id=str(user.pk),
+                   previous_value=before, new_value={f: getattr(user, f) for f in fields})
+    return Response(UserSerializer(user).data)
 
 
 
 
 
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter("search", str, description="Name, username, email or phone."),
+    OpenApiParameter("role", str, enum=[r.value for r in UserRole]),
+    OpenApiParameter("branch", int, description="Only staff assigned to this branch."),
+    OpenApiParameter("is_active", bool, description="true = active, false = deactivated."),
+    OpenApiParameter("ordering", str, enum=["name", "-name", "-date_joined", "-last_login"]),
+]))
 class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.none()  # schema only; real queryset in get_queryset
     """
     /api/users/
     - Owner: manages every employee of the business.
@@ -219,6 +273,7 @@ class UserViewSet(viewsets.ModelViewSet):
     Accounts are deactivated, never deleted (AUTH-008). Every account and
     permission change is audited (AUTH-011, AUD-008, 4.3).
     """
+    queryset = User.objects.none()  # schema only; real queryset in get_queryset
     permission_classes = [HasAnyRole]
     allowed_roles = (UserRole.OWNER, UserRole.ADMIN, UserRole.BRANCH_MANAGER)
 
@@ -229,17 +284,46 @@ class UserViewSet(viewsets.ModelViewSet):
             return UserUpdateSerializer
         return UserSerializer
 
+    ORDERINGS = {
+        "name": ("first_name", "last_name", "username"),
+        "-name": ("-first_name", "-last_name", "-username"),
+        "-date_joined": ("-date_joined",),
+        "-last_login": (F("last_login").desc(nulls_last=True),),
+    }
+
     def get_queryset(self):
-        qs = User.objects.filter(
-            business_id=self.request.user.business_id
-        ).exclude(id=self.request.user.id).order_by("-date_joined")
-
+        if getattr(self, "swagger_fake_view", False):
+            return User.objects.none()
+        actor = self.request.user
+        qs = (
+            User.objects.filter(business_id=actor.business_id)
+            .exclude(id=actor.id)
+            .prefetch_related("branch_assignments")
+        )
         # Branch managers only see users who are assigned to their branches
-        if self.request.user.role == UserRole.BRANCH_MANAGER:
-            their_branches = self.request.user.assigned_branch_ids
-            qs = qs.filter(branch_assignments__branch_id__in=their_branches).distinct()
+        if actor.role == UserRole.BRANCH_MANAGER:
+            qs = qs.filter(branch_assignments__branch_id__in=actor.assigned_branch_ids).distinct()
 
-        return qs
+        if self.action != "list":
+            return qs.order_by("-date_joined")
+        params = self.request.query_params
+        if search := params.get("search", "").strip():
+            qs = qs.filter(
+                Q(username__icontains=search) | Q(first_name__icontains=search)
+                | Q(last_name__icontains=search) | Q(email__icontains=search)
+                | Q(phone__icontains=search)
+            )
+        if role := params.get("role"):
+            qs = qs.filter(role=role)
+        if branch := params.get("branch"):
+            try:
+                qs = qs.filter(branch_assignments__branch_id=int(branch)).distinct()
+            except ValueError:
+                raise ValidationError({"branch": ["Must be a branch id."]})
+        if (active := params.get("is_active")) in ("true", "false"):
+            qs = qs.filter(is_active=active == "true")
+        ordering = self.ORDERINGS.get(params.get("ordering", ""), self.ORDERINGS["name"])
+        return qs.order_by(*ordering, "id")
 
     def _check_can_manage(self, target):
         """Writes are only allowed on users below the actor."""
@@ -299,3 +383,23 @@ class UserViewSet(viewsets.ModelViewSet):
         instance.is_active = False
         instance.save(update_fields=["is_active"])
         self._audit("user_deactivated", instance, previous=before)
+
+    @extend_schema(request=SetPasswordSerializer, responses=DetailSerializer)
+    @action(detail=True, methods=["post"], url_path="set-password")
+    def set_password(self, request, pk=None):
+        """
+        Owner / admin / branch manager sets a new password for a staff member
+        they manage — for staff without an email who can't reset it themselves.
+        The staff member is signed out everywhere.
+        """
+        target = self.get_object()
+        self._check_can_manage(target)
+        serializer = SetPasswordSerializer(data=request.data, context={"target": target})
+        serializer.is_valid(raise_exception=True)
+        target.set_password(serializer.validated_data["new_password"])
+        target.save(update_fields=["password"])
+        revoked = revoke_all_sessions(target)
+        log_action(business=request.user.business, user=request.user,
+                   action="user_password_set", target_type="User", target_id=str(target.pk),
+                   metadata={"username": target.username, "sessions_revoked": revoked})
+        return Response({"detail": "Password updated. They've been signed out on all devices."})

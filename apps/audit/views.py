@@ -21,7 +21,8 @@ from datetime import datetime, time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.db.models import Q
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -39,6 +40,15 @@ from .serializers import AuditLogSerializer
 INVENTORY_ACTIONS = ("stock_movement",)
 
 
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter("action", str, description="Action name; comma-separate several."),
+    OpenApiParameter("user", int, description="Id of the user who did it."),
+    OpenApiParameter("branch", int),
+    OpenApiParameter("target_type", str, description="e.g. Sale, Expense, User."),
+    OpenApiParameter("target_id", str),
+    OpenApiParameter("from", OpenApiTypes.DATE, description="On or after this day (shop time)."),
+    OpenApiParameter("to", OpenApiTypes.DATE, description="On or before this day (shop time)."),
+]))
 class AuditLogViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
                       viewsets.GenericViewSet):
     serializer_class = AuditLogSerializer

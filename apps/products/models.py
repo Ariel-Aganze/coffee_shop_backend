@@ -36,6 +36,16 @@ class ProductType(models.TextChoices):
     PACKAGED = "packaged", "Packaged Product"
 
 
+class StockUnit(models.TextChoices):
+    """Unit a product is counted in (INV-003). Quantities may be fractional for kg/l."""
+    EACH = "each", "Each"
+    KILOGRAM = "kg", "Kilogram"
+    GRAM = "g", "Gram"
+    LITRE = "l", "Litre"
+    MILLILITRE = "ml", "Millilitre"
+    PACK = "pack", "Pack"
+
+
 class Product(models.Model):
     """
     A product sold by the business.
@@ -64,6 +74,10 @@ class Product(models.Model):
         max_length=20,
         choices=ProductType.choices,
         default=ProductType.DRINK,
+    )
+    unit = models.CharField(
+        max_length=10, choices=StockUnit.choices, default=StockUnit.EACH,
+        help_text="Unit stock is counted in (INV-003).",
     )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -122,6 +136,12 @@ class ProductPrice(models.Model):
         help_text="Cost of goods for this product (optional).",
     )
     effective_from = models.DateTimeField(default=timezone.now)
+    reason = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Why the price changed (shown in the price history).",
+    )
     created_by = models.ForeignKey(
         "accounts.User",
         on_delete=models.SET_NULL,

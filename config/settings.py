@@ -140,9 +140,10 @@ REST_FRAMEWORK = {
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    # Each refresh returns a new refresh token and invalidates the old one, so
+    # a leaked refresh token stops working as soon as the real client uses it.
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
-    "BLACKLIST_AFTER_ROTATION": False,
     "UPDATE_LAST_LOGIN": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
@@ -152,6 +153,14 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "Multi-branch coffee shop management system.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    # Separate request/response components (e.g. ProductRequest vs Product) so
+    # generated client types are exact: fields with defaults are optional in
+    # requests, read-only fields never appear in request bodies.
+    "COMPONENT_SPLIT_REQUEST": True,
+    # One name for the payment-method choices used by payments and settings.
+    "ENUM_NAME_OVERRIDES": {
+        "PaymentMethodEnum": "apps.payments.models.PaymentMethod.choices",
+    },
     # Keep the default enum hook; then mark role-dependent fields optional.
     "POSTPROCESSING_HOOKS": [
         "drf_spectacular.hooks.postprocess_schema_enums",

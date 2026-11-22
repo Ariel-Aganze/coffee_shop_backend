@@ -12,6 +12,7 @@ from .views import (
     SalesByCashierView,
     SalesByPaymentMethodView,
     SalesByProductView,
+    SalesOverTimeView,
     SalesSummaryView,
     StockMovementReportView,
 )
@@ -19,6 +20,7 @@ from .views import (
 urlpatterns = [
     path("dashboard/", DashboardView.as_view(), name="rep-dashboard"),
     path("sales/summary/", SalesSummaryView.as_view(), name="rep-sales-summary"),
+    path("sales/over-time/", SalesOverTimeView.as_view(), name="rep-sales-over-time"),
     path("sales/by-branch/", SalesByBranchView.as_view(), name="rep-sales-branch"),
     path("sales/by-product/", SalesByProductView.as_view(), name="rep-sales-product"),
     path("sales/by-cashier/", SalesByCashierView.as_view(), name="rep-sales-cashier"),

@@ -13,8 +13,7 @@ from .models import Business
 from .serializers import (
     BusinessRegistrationSerializer,
     BusinessSerializer,
-    RegistrationRequestDoc,
-    RegistrationResponseDoc,
+    RegistrationResponseSerializer,
 )
 
 
@@ -26,7 +25,7 @@ class BusinessRegistrationView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
-    @extend_schema(request=RegistrationRequestDoc, responses={201: RegistrationResponseDoc}, auth=[])
+    @extend_schema(request=BusinessRegistrationSerializer, responses={201: RegistrationResponseSerializer}, auth=[])
     def post(self, request):
         serializer = BusinessRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

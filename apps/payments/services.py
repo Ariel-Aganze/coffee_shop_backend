@@ -103,6 +103,10 @@ def add_payments_to_sale(
         method = raw.get("method")
         if method not in PaymentMethod.values:
             raise ValidationError(f"Unsupported payment method: '{method}'.")
+        if method not in settings.enabled_payment_methods:
+            raise ValidationError(
+                f"{PaymentMethod(method).label} payments are turned off for this business."
+            )
 
         try:
             amount = Decimal(str(raw.get("amount", "0")))

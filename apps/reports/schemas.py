@@ -38,6 +38,10 @@ EXPORT = OpenApiParameter("export", str, enum=["csv", "pdf"],
                           description="Download the report as CSV or PDF instead of JSON.")
 STATUS = OpenApiParameter("status", str, description="Filter by status.")
 REPORT_PARAMS = [FROM, TO, BRANCH, EXPORT]
+SALES_GROUP = OpenApiParameter("group", str, enum=["day", "week", "month"],
+                               description="Bucket size. Default: day.")
+EXPENSE_GROUP = OpenApiParameter("group", str, enum=["category", "branch", "month"],
+                                 description="Group rows by. Default: category.")
 
 
 # ------------------------------------------------------------------------------
@@ -58,6 +62,23 @@ class SalesSummaryRow(serializers.Serializer):
 class SalesSummaryReport(serializers.Serializer):
     period = PeriodSerializer()
     results = SalesSummaryRow(many=True)
+
+
+class SalesOverTimeRow(serializers.Serializer):
+    period_start = serializers.DateField()
+    period_end = serializers.DateField()
+    currency_code = serializers.CharField()
+    total_sales = Money()
+    refunds_total = Money()
+    net_sales = Money()
+    transactions = serializers.IntegerField()
+    average_transaction_value = Money()
+
+
+class SalesOverTimeReport(serializers.Serializer):
+    period = PeriodSerializer()
+    group = serializers.ChoiceField(choices=["day", "week", "month"])
+    results = SalesOverTimeRow(many=True)
 
 
 class SalesByBranchRow(serializers.Serializer):
@@ -130,12 +151,17 @@ class StockRow(serializers.Serializer):
     product_id = serializers.IntegerField()
     product_name = serializers.CharField()
     sku = serializers.CharField()
+    unit = serializers.CharField()
     quantity = Qty()
     minimum_threshold = Qty()
 
 
 class CurrentStockRow(StockRow):
     is_low_stock = serializers.BooleanField()
+    unit_cost = Money(allow_null=True, required=False,
+                      help_text="Latest cost price; omitted for roles that can't see costs.")
+    stock_value = Money(allow_null=True, required=False,
+                        help_text="quantity × unit_cost; omitted for roles that can't see costs.")
 
 
 class CurrentStockReport(serializers.Serializer):
@@ -153,6 +179,7 @@ class StockMovementRow(serializers.Serializer):
     branch_name = serializers.CharField()
     product_name = serializers.CharField()
     sku = serializers.CharField()
+    unit = serializers.CharField()
     movement_type = serializers.CharField()
     delta = Qty()
     quantity_after = Qty()
@@ -171,7 +198,7 @@ class StockMovementReport(serializers.Serializer):
 # Financial
 # ------------------------------------------------------------------------------
 class ExpensesRow(serializers.Serializer):
-    category = serializers.CharField()
+    group = serializers.CharField(help_text="Category name, branch name or YYYY-MM, per `group`.")
     currency_code = serializers.CharField()
     status = serializers.CharField()
     total = Money()
@@ -185,6 +212,7 @@ class CurrencyTotal(serializers.Serializer):
 
 class ExpensesReport(serializers.Serializer):
     period = PeriodSerializer()
+    group = serializers.ChoiceField(choices=["category", "branch", "month"])
     results = ExpensesRow(many=True)
     approved_totals = CurrencyTotal(many=True)
 

@@ -35,6 +35,7 @@ class CashMovementSerializer(serializers.ModelSerializer):
 class CashSessionSerializer(serializers.ModelSerializer):
     branch_name = serializers.CharField(source="branch.name", read_only=True)
     cashier_display = serializers.CharField(source="cashier.username", read_only=True)
+    cashier_name = serializers.SerializerMethodField()
     movements = CashMovementSerializer(many=True, read_only=True)
     live_expected_cash = serializers.SerializerMethodField()
 
@@ -46,6 +47,7 @@ class CashSessionSerializer(serializers.ModelSerializer):
             "branch_name",
             "cashier",
             "cashier_display",
+            "cashier_name",
             "status",
             "opening_balance",
             "opened_at",
@@ -62,6 +64,9 @@ class CashSessionSerializer(serializers.ModelSerializer):
             "movements",
         )
         read_only_fields = fields
+
+    def get_cashier_name(self, obj) -> str:
+        return obj.cashier.get_full_name() or obj.cashier.username
 
     @extend_schema_field(serializers.DecimalField(max_digits=14, decimal_places=4, allow_null=True))
     def get_live_expected_cash(self, obj):

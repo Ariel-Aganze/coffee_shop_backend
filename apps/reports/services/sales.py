@@ -264,3 +264,68 @@ def sales_by_payment_method(request) -> dict:
             for r in rows
         ],
     }
+
+
+GROUPINGS = ("day", "week", "month")
+
+
+def sales_over_time(request) -> dict:
+    """
+    REP-001..REP-003: net sales per day, week (Monday start) or month, in the
+    business timezone (activated by the view). Refunds count against the
+    period the sale was made in, like every other sales report.
+    """
+    from datetime import timedelta
+
+    from django.db.models.functions import TruncDay, TruncMonth, TruncWeek
+    from rest_framework.exceptions import ValidationError
+
+    group = request.query_params.get("group") or "day"
+    if group not in GROUPINGS:
+        raise ValidationError({"group": f"Use one of: {', '.join(GROUPINGS)}."})
+    trunc = {"day": TruncDay, "week": TruncWeek, "month": TruncMonth}[group]
+
+    base, f, t = _base_sales_qs(request)
+    paid = recognized_sales(base)
+    rows = (
+        paid.annotate(bucket=trunc("created_at"))
+        .values("bucket", "currency_code")
+        .annotate(total_sales=Coalesce(Sum("total_amount"), ZERO), transactions=Count("id"))
+        .order_by("bucket", "currency_code")
+    )
+    refunds = {
+        (r["bucket"].date(), r["sale__currency_code"]): r["total"] or Decimal("0")
+        for r in Payment.objects.filter(is_refund=True, sale__in=paid.values("pk"))
+        .annotate(bucket=trunc("sale__created_at"))
+        .values("bucket", "sale__currency_code")
+        .annotate(total=Sum("amount"))
+        .order_by()
+    }
+
+    def end_of(start):
+        if group == "day":
+            end = start
+        elif group == "week":
+            end = start + timedelta(days=6)
+        else:
+            nxt = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+            end = nxt - timedelta(days=1)
+        return min(end, t)
+
+    results = []
+    for r in rows:
+        start = r["bucket"].date()
+        refunded = refunds.get((start, r["currency_code"]), Decimal("0"))
+        total = r["total_sales"] or Decimal("0")
+        net = total - refunded
+        results.append({
+            "period_start": max(start, f).isoformat(),
+            "period_end": end_of(start).isoformat(),
+            "currency_code": r["currency_code"],
+            "total_sales": str(total),
+            "refunds_total": str(refunded),
+            "net_sales": str(net),
+            "transactions": r["transactions"],
+            "average_transaction_value": str(_avg(net, r["transactions"])),
+        })
+    return {"period": _period(f, t), "group": group, "results": results}

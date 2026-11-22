@@ -284,3 +284,47 @@ def restore_stock_for_sale(
             )
         )
     return movements
+
+@transaction.atomic
+def stock_count(*, branch: Branch, lines: list[dict], reason: str, performed_by) -> dict:
+    """
+    Record a physical stock count (INV-017, INV-018): compare each counted
+    quantity with the recorded one and post one ADJUSTMENT movement per line
+    that differs, all in one transaction. Counting a product that wasn't
+    tracked at the branch starts tracking it.
+    """
+    if not reason.strip():
+        raise ValidationError("A reason is required for a stock count.")
+    ids = [int(line["product_id"]) for line in lines]
+    products = {
+        p.id: p for p in Product.objects.filter(id__in=ids, business_id=branch.business_id)
+    }
+    missing = set(ids) - set(products)
+    if missing:
+        raise ValidationError(f"Unknown product(s): {sorted(missing)}.")
+
+    results, adjusted = [], 0
+    for line in lines:
+        product = products[int(line["product_id"])]
+        counted = Decimal(str(line["counted_quantity"]))
+        if counted < 0:
+            raise ValidationError("Counted quantities cannot be negative.")
+        inv = _ensure_inventory_row(branch, product)
+        expected = inv.quantity
+        difference = counted - expected
+        if difference != 0:
+            _apply_movement(
+                branch=branch, product=product,
+                movement_type=StockMovementType.ADJUSTMENT,
+                delta=difference, performed_by=performed_by,
+                reason=f"Stock count: {reason.strip()}",
+            )
+            adjusted += 1
+        results.append({
+            "product": product.id,
+            "product_name": product.name,
+            "expected": expected,
+            "counted": counted,
+            "difference": difference,
+        })
+    return {"adjusted": adjusted, "lines": results}

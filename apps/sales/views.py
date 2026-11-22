@@ -1,3 +1,4 @@
+from django.db import transaction
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -8,6 +9,7 @@ from apps.accounts.access import scope_to_branches
 from apps.accounts.constants import UserRole
 from apps.accounts.permissions import HasAnyRole
 from apps.branches.models import Branch
+from apps.settings.regional import business_zone, day_end, day_start
 from apps.payments.serializers import (
     CancelSerializer,
     PaymentsBulkCreateSerializer,
@@ -18,13 +20,27 @@ from apps.payments.services import (
     cancel_sale,
     refund_sale,
 )
-from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+)
 
 from .models import Sale
 from .serializers import ReceiptSerializer, SaleCreateSerializer, SaleReadSerializer
 from .services import create_sale
 
 
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter("branch", int),
+    OpenApiParameter("from", OpenApiTypes.DATE, description="Created on or after this day."),
+    OpenApiParameter("to", OpenApiTypes.DATE, description="Created on or before this day."),
+    OpenApiParameter("status", str, enum=["completed", "cancelled", "refunded"]),
+    OpenApiParameter("cashier", int, description="User id of the cashier."),
+    OpenApiParameter("search", str, description="Transaction number contains."),
+]))
 class SaleViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
@@ -67,12 +83,12 @@ class SaleViewSet(
         branch_id = params.get("branch")
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
-        date_from = params.get("from")
-        if date_from:
-            qs = qs.filter(created_at__date__gte=date_from)
-        date_to = params.get("to")
-        if date_to:
-            qs = qs.filter(created_at__date__lte=date_to)
+        if params.get("from") or params.get("to"):
+            tz = business_zone(user.business_id)  # days at the shop, not UTC
+            if params.get("from"):
+                qs = qs.filter(created_at__gte=day_start(params["from"], "from", tz))
+            if params.get("to"):
+                qs = qs.filter(created_at__lte=day_end(params["to"], "to", tz))
         status_param = params.get("status")
         if status_param:
             qs = qs.filter(status=status_param)
@@ -116,14 +132,21 @@ class SaleViewSet(
 
         idempotency_key = request.headers.get("X-Idempotency-Key")
 
-        sale, replayed = create_sale(
-            user=request.user,
-            branch=branch,
-            items_payload=items_payload,
-            idempotency_key=idempotency_key,
-            request_payload_for_hash=request.data,
-            note=data.get("note", ""),
-        )
+        # Sale + payments in one transaction: a failed payment leaves no
+        # unpaid sale behind (and no stock consumed for it).
+        with transaction.atomic():
+            sale, replayed = create_sale(
+                user=request.user,
+                branch=branch,
+                items_payload=items_payload,
+                idempotency_key=idempotency_key,
+                request_payload_for_hash=request.data,
+                note=data.get("note", ""),
+            )
+            if data.get("payments") and not replayed:
+                add_payments_to_sale(sale=sale, payments_payload=data["payments"],
+                                     user=request.user)
+        sale = self.get_queryset().get(pk=sale.pk)  # fresh, with payments
 
         response_data = SaleReadSerializer(sale).data
         http_status = status.HTTP_200_OK if replayed else status.HTTP_201_CREATED

@@ -30,6 +30,15 @@ class Currency(models.Model):
         return f"{self.code} - {self.name}"
 
 
+# Payment methods (apps.payments.models.PaymentMethod) a new business accepts.
+# "other" is off until the owner turns it on.
+DEFAULT_PAYMENT_METHODS = ("cash", "mobile_money", "bank_card", "bank_transfer")
+
+
+def default_payment_methods():
+    return list(DEFAULT_PAYMENT_METHODS)
+
+
 class BusinessSettings(models.Model):
     """
     Per-business configuration: primary currency and regional settings.
@@ -56,6 +65,13 @@ class BusinessSettings(models.Model):
             "Largest discount a cashier may apply on a sale line, as a % of "
             "the line value (POS-008). 0 = cashiers cannot discount. Owners "
             "and branch managers are not limited."
+        ),
+    )
+    enabled_payment_methods = models.JSONField(
+        default=default_payment_methods,
+        help_text=(
+            "Payment methods the point of sale offers (SRS 5.5 'Supported "
+            "Payment Methods'). Values from PaymentMethod."
         ),
     )
     updated_at = models.DateTimeField(auto_now=True)

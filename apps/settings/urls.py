@@ -6,7 +6,8 @@ from .views import BusinessSettingsViewSet, CurrencyListView
 # explicitly instead of through a router (which would add a meaningless /<id>/).
 settings_detail = BusinessSettingsViewSet.as_view({"get": "retrieve", "patch": "partial_update"})
 change_currency = BusinessSettingsViewSet.as_view({"post": "change_currency"})
-currency_history = BusinessSettingsViewSet.as_view({"get": "currency_history"})
+# Explicit routes don't apply @action options, so pass them here.
+currency_history = BusinessSettingsViewSet.as_view({"get": "currency_history"}, pagination_class=None)
 
 urlpatterns = [
     path("currencies/", CurrencyListView.as_view(), name="currency-list"),

@@ -4,6 +4,9 @@ from .models import Notification
 
 
 class NotificationSerializer(serializers.ModelSerializer):
+    branch_name = serializers.CharField(source="branch.name", read_only=True,
+                                        allow_null=True, default=None)
+
     class Meta:
         model = Notification
         fields = (
@@ -13,6 +16,7 @@ class NotificationSerializer(serializers.ModelSerializer):
             "message",
             "metadata",
             "branch",
+            "branch_name",
             "is_read",
             "read_at",
             "created_at",

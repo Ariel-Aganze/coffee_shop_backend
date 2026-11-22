@@ -13,6 +13,7 @@ from apps.payments.serializers import (
     RefundCreateSerializer,
 )
 from apps.payments.services import (
+from apps.settings.regional import business_zone, day_end, day_start
     add_payments_to_sale,
     cancel_sale,
     refund_sale,
@@ -57,12 +58,12 @@ class SaleViewSet(
         branch_id = params.get("branch")
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
-        date_from = params.get("from")
-        if date_from:
-            qs = qs.filter(created_at__date__gte=date_from)
-        date_to = params.get("to")
-        if date_to:
-            qs = qs.filter(created_at__date__lte=date_to)
+        if params.get("from") or params.get("to"):
+            tz = business_zone(self.request.user.business_id)  # shop days, not UTC
+            if params.get("from"):
+                qs = qs.filter(created_at__gte=day_start(params["from"], "from", tz))
+            if params.get("to"):
+                qs = qs.filter(created_at__lte=day_end(params["to"], "to", tz))
         status_param = params.get("status")
         if status_param:
             qs = qs.filter(status=status_param)

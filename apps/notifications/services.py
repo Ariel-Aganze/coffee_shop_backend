@@ -9,6 +9,19 @@ from django.utils import timezone
 # ------------------------------------------------------------------------------
 # Core: create a notification for a user
 # ------------------------------------------------------------------------------
+def _num(value) -> str:
+    """4.0000 → "4", 14500.5000 → "14,500.5": readable in a sentence."""
+    from decimal import Decimal
+
+    d = Decimal(str(value)).normalize()
+    whole, _, frac = f"{d:f}".partition(".")
+    return f"{int(whole):,}" + (f".{frac}" if frac else "")
+
+
+def _name(user) -> str:
+    return user.get_full_name() or user.username
+
+
 def notify(
     *,
     recipient,
@@ -97,8 +110,8 @@ def notify_low_stock(*, branch, product, current_quantity, threshold):
             notification_type=NotificationType.LOW_STOCK,
             title=f"Low stock: {product.name}",
             message=(
-                f"'{product.name}' at {branch.name} is at {current_quantity} "
-                f"(threshold: {threshold})."
+                f"{product.name} at {branch.name}: {_num(current_quantity)} left "
+                f"(minimum {_num(threshold)})."
             ),
             branch=branch,
             metadata={
@@ -126,8 +139,9 @@ def notify_cash_discrepancy(*, session, difference):
             notification_type=NotificationType.CASH_DISCREPANCY,
             title="Cash discrepancy detected",
             message=(
-                f"Session #{session.pk} at {session.branch.name} closed with "
-                f"a difference of {difference} {session.currency_code}."
+                f"{_name(session.cashier)}'s drawer at {session.branch.name} closed "
+                f"{'over' if difference > 0 else 'short'} by "
+                f"{_num(abs(difference))} {session.currency_code}."
             ),
             branch=session.branch,
             metadata={
@@ -146,8 +160,8 @@ def notify_pending_approval(*, expense):
         notification_type=NotificationType.PENDING_APPROVAL,
         title=f"Pending approval: {expense.category.name}",
         message=(
-            f"Expense of {expense.amount} {expense.currency_code} "
-            f"submitted by {expense.submitted_by.username} needs review."
+            f"{_name(expense.submitted_by)} recorded {_num(expense.amount)} "
+            f"{expense.currency_code} ({expense.description[:60]}) — it needs your review."
         ),
         branch=expense.branch,
         metadata={

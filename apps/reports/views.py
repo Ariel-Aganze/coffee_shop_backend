@@ -46,6 +46,7 @@ from .services.sales import (
     sales_by_cashier,
     sales_by_payment_method,
     sales_by_product,
+    sales_over_time,
     sales_summary,
 )
 
@@ -157,6 +158,18 @@ class SalesSummaryView(BaseReportView):
 
 
 @extend_schema_view(get=extend_schema(
+    parameters=s.REPORT_PARAMS + [s.SALES_GROUP],
+    responses={200: OpenApiResponse(s.SalesOverTimeReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
+))
+class SalesOverTimeView(BaseReportView):
+    allowed_roles = SALES_ROLES
+    title, slug = "Sales over time", "sales-over-time"
+
+    def run(self, request):
+        return sales_over_time(request)
+
+
+@extend_schema_view(get=extend_schema(
     parameters=s.REPORT_PARAMS,
     responses={200: OpenApiResponse(s.SalesByBranchReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
 ))
@@ -232,7 +245,7 @@ class LowStockView(BaseReportView):
 
 
 @extend_schema_view(get=extend_schema(
-    parameters=s.REPORT_PARAMS + [OpenApiParameter("product", int), OpenApiParameter("type", str, description="Movement type, e.g. sale, purchase, adjustment.")],
+    parameters=s.REPORT_PARAMS + [OpenApiParameter("product", int), OpenApiParameter("type", str, description="Movement type(s), comma-separated, e.g. damaged,expired.")],
     responses={200: OpenApiResponse(s.StockMovementReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
 ))
 class StockMovementReportView(BaseReportView):
@@ -247,7 +260,7 @@ class StockMovementReportView(BaseReportView):
 # Financial
 # ------------------------------------------------------------------------------
 @extend_schema_view(get=extend_schema(
-    parameters=s.REPORT_PARAMS + [s.STATUS],
+    parameters=s.REPORT_PARAMS + [s.STATUS, s.EXPENSE_GROUP],
     responses={200: OpenApiResponse(s.ExpensesReport, description="JSON, or a CSV/PDF file when ?export= is set.")},
 ))
 class ExpensesReportView(BaseReportView):

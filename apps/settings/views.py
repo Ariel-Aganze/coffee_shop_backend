@@ -1,6 +1,6 @@
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -24,8 +24,12 @@ class CurrencyListView(APIView):
     """
     Public read-only currency catalogue (CUR-004..CUR-007).
     Supports search by name / ISO code / country.
+
+    Public (no sign-in): the registration wizard needs it before an account
+    exists, and it only contains ISO 4217 reference data.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
+    authentication_classes = []
 
     @extend_schema(
         parameters=[OpenApiParameter("search", str, description="Search by ISO code, name or country.")],
@@ -133,7 +137,8 @@ class BusinessSettingsViewSet(viewsets.GenericViewSet,
         return Response(BusinessSettingsSerializer(settings).data)
 
     @extend_schema(responses=CurrencyChangeLogSerializer(many=True))
-    @action(detail=False, methods=["get"], url_path="currency-history")
+    # A handful of rows at most: returned whole (not paginated).
+    @action(detail=False, methods=["get"], url_path="currency-history", pagination_class=None)
     def currency_history(self, request):
         qs = self.get_object().business.currency_changes.select_related(
             "old_currency", "new_currency", "changed_by"

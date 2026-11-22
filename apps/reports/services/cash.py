@@ -27,7 +27,7 @@ def cash_reconciliation_report(request) -> dict:
             {
                 "session_id": s.id,
                 "branch_name": s.branch.name,
-                "cashier": s.cashier.username,
+                "cashier": s.cashier.get_full_name() or s.cashier.username,
                 "status": s.status,
                 "opened_at": s.opened_at.isoformat(),
                 "closed_at": s.closed_at.isoformat() if s.closed_at else None,

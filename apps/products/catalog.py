@@ -27,6 +27,7 @@ from apps.accounts.constants import UserRole
 from apps.accounts.permissions import HasAnyRole
 from apps.branches.models import Branch
 from apps.inventory.models import Inventory
+from apps.payments.models import PaymentMethod
 from apps.sales.services import DISCOUNT_APPROVER_ROLES
 from apps.settings.models import BusinessSettings
 
@@ -77,8 +78,16 @@ class _CatalogProduct(serializers.Serializer):
         help_text="False only for tracked products with nothing on hand.")
 
 
+class _CatalogPaymentMethod(serializers.Serializer):
+    code = serializers.ChoiceField(choices=PaymentMethod.choices)
+    label = serializers.CharField()
+    needs_reference = serializers.BooleanField(
+        help_text="Non-cash payments need a reference (transaction code, card slip…).")
+
+
 class PosCatalogSerializer(serializers.Serializer):
     branch = _CatalogBranch()
+    payment_methods = _CatalogPaymentMethod(many=True)
     currency = _CatalogCurrency()
     discount = _CatalogDiscount()
     categories = _CatalogCategory(many=True)
@@ -136,6 +145,10 @@ class PosCatalogView(APIView):
                 "unlimited": unlimited,
                 "max_percent": None if unlimited else str(settings.cashier_max_discount_percent),
             },
+            "payment_methods": [
+                {"code": m, "label": PaymentMethod(m).label, "needs_reference": m != PaymentMethod.CASH}
+                for m in settings.enabled_payment_methods
+            ],
             "categories": [{"id": c.id, "name": c.name} for c in categories],
             "products": [self._product(request, p, stock.get(p.id)) for p in products],
         })
